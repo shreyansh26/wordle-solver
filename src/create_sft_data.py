@@ -37,10 +37,11 @@ def get_feedback(model_answer, correct_answer):
     return feedback_str.strip()
 
 def check_answer(turn, model_answer, correct_answer):
+    print(model_answer)
     model_answer_extracted = check_answer_format(model_answer)
     # Break entire loop after 3 retries if this happens
     if model_answer_extracted is None:
-        return False, "Model answer is not in the correct format"
+        return False, "Model answer is not in the correct format", "Incorrect format"
     
     final_feedback_str = f"Guess {turn}: {model_answer_extracted} -> FEEDBACK: {get_feedback(model_answer_extracted, correct_answer)}"
     if model_answer_extracted == correct_answer:
@@ -87,7 +88,7 @@ if __name__ == "__main__":
 
     messages = None
     curr_response = None
-    last_turn_feedback = None
+    last_turn_feedback = ""
     model_answer_extracted = None
     
     for turn in range(1, 7):
@@ -95,6 +96,9 @@ if __name__ == "__main__":
             messages, prompt = get_messages(turn=turn)
         else:
             messages, prompt = get_messages(turn=turn, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback)
+
+        print(prompt)
+        print("-"*50)
         curr_response = get_response(prompt)
         is_correct, final_feedback_str, model_answer_extracted = check_answer(turn, curr_response, correct_answer)
         
@@ -106,5 +110,7 @@ if __name__ == "__main__":
             break
 
         past_response = curr_response
+        last_turn_feedback += "\n" + final_feedback_str
+        print("*"*100)
     else:
         print(f"Answer not found. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")

@@ -24,8 +24,7 @@ USER_PROMPT_FIRST = '''Make your first 5-letter word guess.'''
 
 USER_PROMPT_SUBSEQUENT = '''Make a new 5-letter word guess.
 
-Here is some previous feedback:
-{feedback_str}
+Here is some previous feedback: {feedback_str}
 '''
 
 ASSISTANT_PROMPT_FIRST = '''Let me solve this step by step.'''

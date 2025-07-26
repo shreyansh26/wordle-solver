@@ -1,0 +1,1 @@
+vllm serve Qwen/Qwen3-4B --reasoning-parser deepseek_r1 --port 9200 --gpu-memory-utilization 0.6 --disable-log-requests
