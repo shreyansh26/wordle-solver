@@ -1,3 +1,4 @@
+import os
 import re
 import pandas as pd
 from prompts import *
@@ -5,31 +6,7 @@ from openai import OpenAI
 from api_key import TOGETHER_API_KEY
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
-import logging
-import os
-from datetime import datetime
-import pytz
-
-def ist_time_converter(timestamp):
-    return datetime.fromtimestamp(timestamp, pytz.timezone('Asia/Kolkata')).timetuple()
-
-# Logging set up
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-if not os.path.exists('logs'):
-    os.makedirs('logs')
-
-file_handler = logging.FileHandler('logs/create_sft_data.log')
-stream_handler = logging.StreamHandler()
-
-log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log_formatter.converter = ist_time_converter
-file_handler.setFormatter(log_formatter)
-stream_handler.setFormatter(log_formatter)
-
-logger.addHandler(file_handler)
-logger.addHandler(stream_handler)
+from logging_utils import get_logger
 
 # Load HF_HOME
 load_dotenv()
@@ -48,8 +25,16 @@ else:
         )
 
 # model_name = "moonshotai/Kimi-K2-Instruct"
-model_name = "deepseek-ai/DeepSeek-R1-0528"
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+# model_name = "deepseek-ai/DeepSeek-R1-0528"
+model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
+
+hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
+# Create directory for model data
+model_data_dir = os.path.join("..", "data", "sft", model_name.replace("/", "_"))
+logger = get_logger(f"create_sft_data_{model_name.replace('/', '_')}")
+os.makedirs(model_data_dir, exist_ok=True)
+
+tokenizer = AutoTokenizer.from_pretrained(hf_model_name, trust_remote_code=True)
 
 def check_answer_format(answer):
     pattern_guess = re.compile("<guess>(.*?)</guess>", re.DOTALL)
@@ -59,12 +44,23 @@ def check_answer_format(answer):
     if match_guess is None or match_think is None:
         return None, None
     else:
-        return match_guess.group(1).strip(), match_think.group(1).strip()
+        thinking = match_think.group(1).strip()
+        guess = match_guess.group(1).strip()
+
+        # Sometime R1 adds more text in between </think> and <guess> i.e. end of thinking and start of guess
+        # Include that in the think text
+        pattern_additional_text = re.compile("</think>(.*?)<guess>", re.DOTALL)
+        match_additional_text = pattern_additional_text.search(answer)
+        additional_text = match_additional_text.group(1).strip() if match_additional_text else ""
+        return guess, thinking + additional_text
 
 def get_feedback(model_answer, correct_answer):
     model_answer_chars = list(map(lambda x: x.lower(), model_answer))
     correct_answer_chars = list(map(lambda x: x.lower(), correct_answer))
     feedback_str = ""
+    if len(model_answer_chars) != len(correct_answer_chars):
+        logger.info(f"Model answer is not five letters. Model answer: {model_answer}, Correct answer: {correct_answer}")
+        return "Model answer is not five letters."
     for i in range(len(model_answer_chars)):
         if model_answer_chars[i] == correct_answer_chars[i]:
             feedback_str += model_answer_chars[i].upper() + "(✓) "
@@ -163,12 +159,13 @@ def execute_turns(correct_answer):
         last_turn_feedback += "\n" + final_feedback_str
 
         curr_row = row.copy()
+        curr_row["model_name"] = model_name
         curr_row["turn"] = turn
+        curr_row["correct_answer"] = correct_answer
         curr_row["prompt"] = prompt
         curr_row["messages"] = messages.copy()
         curr_row["response"] = curr_response
         curr_row["model_answer"] = model_answer_extracted
-        curr_row["correct_answer"] = correct_answer
         curr_row["model_think"] = model_think_extracted
         curr_row["feedback"] = final_feedback_str
         curr_row["curr_answer"] = final_answer
@@ -182,7 +179,7 @@ def execute_turns(correct_answer):
         final_answer = "FAIL"
 
     df_wordle_data = pd.DataFrame(rows)
-    df_wordle_data.to_csv(f"wordle_data_{correct_answer}.csv", index=False)
+    df_wordle_data.to_csv(f"{model_data_dir}/wordle_data_{correct_answer}.csv", index=False)
 
     return
 
