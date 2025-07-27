@@ -213,18 +213,15 @@ async def process_word_chunk(words_chunk):
     return successful_words
 
 async def main():
-    """Main function to process 500 words in chunks of 10"""
     # Load word list
     with open('../data/word_list.txt', 'r') as f:
         word_list = f.read().splitlines()
     
-    # Sample 500 words randomly
-    # sample_words = random.sample(word_list, min(10, len(word_list)))
-    sample_words = ["xywza"]
+    # Sample words randomly
+    sample_words = random.sample(word_list, min(1000, len(word_list)))
     logger.info(f"Selected {len(sample_words)} words to process")
     
-    # Process words in chunks of 10
-    chunk_size = 10
+    chunk_size = 20
     all_successful_words = []
     
     for i in range(0, len(sample_words), chunk_size):
