@@ -5,7 +5,33 @@ from openai import OpenAI
 from api_key import TOGETHER_API_KEY
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
+import logging
+import os
+from datetime import datetime
+import pytz
 
+def ist_time_converter(timestamp):
+    return datetime.fromtimestamp(timestamp, pytz.timezone('Asia/Kolkata')).timetuple()
+
+# Logging set up
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+
+file_handler = logging.FileHandler('logs/create_sft_data.log')
+stream_handler = logging.StreamHandler()
+
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_formatter.converter = ist_time_converter
+file_handler.setFormatter(log_formatter)
+stream_handler.setFormatter(log_formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
+
+# Load HF_HOME
 load_dotenv()
 
 USE_TOGETHER_MODELS = True
@@ -21,7 +47,8 @@ else:
             base_url="http://localhost:9200/v1",
         )
 
-model_name = "moonshotai/Kimi-K2-Instruct"
+# model_name = "moonshotai/Kimi-K2-Instruct"
+model_name = "deepseek-ai/DeepSeek-R1-0528"
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
 def check_answer_format(answer):
@@ -48,14 +75,13 @@ def get_feedback(model_answer, correct_answer):
     return feedback_str.strip()
 
 def check_answer(turn, model_answer, correct_answer):
-    # print(model_answer)
     model_answer_extracted, model_think_extracted = check_answer_format(model_answer)
-    # Break entire loop after 3 retries if this happens
+
     if model_answer_extracted is None or model_think_extracted is None:
         return False, "Model answer is not in the correct format", "Incorrect format answer", "Incorrect format think"
     
     final_feedback_str = f"Guess {turn}: {model_answer_extracted} -> FEEDBACK: {get_feedback(model_answer_extracted, correct_answer)}"
-    if model_answer_extracted == correct_answer:
+    if model_answer_extracted.lower() == correct_answer.lower():
         return True, final_feedback_str, model_answer_extracted, model_think_extracted
     else:
         return False, final_feedback_str, model_answer_extracted, model_think_extracted
@@ -77,7 +103,7 @@ def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=N
         messages,
         tokenize=False,
         add_generation_prompt=True,
-        enable_thinking=True # Switches between thinking and non-thinking modes. Default is True.
+        enable_thinking=True
     )
     return messages, prompt
 
@@ -101,15 +127,14 @@ def get_response_together(prompt, messages):
     )
     return completion.choices[0].message.content
 
-if __name__ == "__main__":
-    word_list = open('../data/word_list.txt').read().splitlines()
-
-    correct_answer = "APPLE"
-
+def execute_turns(correct_answer):
     messages = None
     curr_response = None
     last_turn_feedback = ""
     model_answer_extracted = None
+    final_answer = "FAIL"
+    row = {}
+    rows = []
     
     for turn in range(1, 7):
         if turn == 1:
@@ -117,23 +142,52 @@ if __name__ == "__main__":
         else:
             messages, prompt = get_messages(turn=turn, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback)
 
-        print(prompt)
-        print("-"*50)
         curr_response = get_response_together(prompt, messages)
-        print(curr_response)
-        print("="*100)
 
         is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
-        
-        print("Model prediction: ", model_answer_extracted)
-        print("Final feedback: ", final_feedback_str)
+
+        cnt_retries = 0
+        while final_feedback_str == "Model answer is not in the correct format":
+            logger.info(f"Model answer is not in the correct format. Retrying... {cnt_retries}")
+            cnt_retries += 1
+            if cnt_retries > 3:
+                break
+            curr_response = get_response_together(prompt, messages)
+            is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
 
         if is_correct:
-            print("Yay")
-            break
+            final_answer = "SUCCESS"
+            logger.info(f"Answer found in turn {turn}. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")
 
         past_response = model_think_extracted + "\n\n" + "<guess>" + model_answer_extracted + "</guess>"
         last_turn_feedback += "\n" + final_feedback_str
-        print("*"*100)
+
+        curr_row = row.copy()
+        curr_row["turn"] = turn
+        curr_row["prompt"] = prompt
+        curr_row["messages"] = messages.copy()
+        curr_row["response"] = curr_response
+        curr_row["model_answer"] = model_answer_extracted
+        curr_row["correct_answer"] = correct_answer
+        curr_row["model_think"] = model_think_extracted
+        curr_row["feedback"] = final_feedback_str
+        curr_row["curr_answer"] = final_answer
+
+        rows.append(curr_row.copy())
+
+        if is_correct:
+            break
     else:
-        print(f"Answer not found. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")
+        logger.info(f"Answer not found. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")
+        final_answer = "FAIL"
+
+    df_wordle_data = pd.DataFrame(rows)
+    df_wordle_data.to_csv(f"wordle_data_{correct_answer}.csv", index=False)
+
+    return
+
+if __name__ == "__main__":
+    word_list = open('../data/word_list.txt').read().splitlines()
+
+    correct_answer = "APPLE"
+    execute_turns(correct_answer)
