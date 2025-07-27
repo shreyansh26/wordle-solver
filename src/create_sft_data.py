@@ -1,8 +1,10 @@
 import os
 import re
+import asyncio
+import random
 import pandas as pd
 from prompts import *
-from openai import OpenAI
+from openai import AsyncOpenAI
 from api_key import TOGETHER_API_KEY
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
@@ -14,19 +16,19 @@ load_dotenv()
 USE_TOGETHER_MODELS = True
 
 if USE_TOGETHER_MODELS:
-    client = OpenAI(
+    client = AsyncOpenAI(
             api_key=TOGETHER_API_KEY,
             base_url="https://api.together.xyz/v1",
         )
 else:
-    client = OpenAI(
+    client = AsyncOpenAI(
             api_key="EMPTY",
             base_url="http://localhost:9200/v1",
         )
 
 # model_name = "moonshotai/Kimi-K2-Instruct"
-# model_name = "deepseek-ai/DeepSeek-R1-0528"
-model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
+model_name = "deepseek-ai/DeepSeek-R1-0528"
+# model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
 
 hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
 # Create directory for model data
@@ -103,8 +105,8 @@ def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=N
     )
     return messages, prompt
 
-def get_response(prompt, messages):
-    completion = client.completions.create(
+async def get_response(prompt, messages):
+    completion = await client.completions.create(
         model=model_name,
         prompt=prompt,
         max_tokens=8192,
@@ -114,8 +116,8 @@ def get_response(prompt, messages):
     )
     return completion.choices[0].text
 
-def get_response_together(prompt, messages):
-    completion = client.chat.completions.create(
+async def get_response_together(prompt, messages):
+    completion = await client.chat.completions.create(
         model=model_name,
         messages=messages,
         max_tokens=8192,
@@ -123,68 +125,127 @@ def get_response_together(prompt, messages):
     )
     return completion.choices[0].message.content
 
-def execute_turns(correct_answer):
-    messages = None
-    curr_response = None
-    last_turn_feedback = ""
-    model_answer_extracted = None
-    final_answer = "FAIL"
-    row = {}
-    rows = []
-    
-    for turn in range(1, 7):
-        if turn == 1:
-            messages, prompt = get_messages(turn=turn)
-        else:
-            messages, prompt = get_messages(turn=turn, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback)
+async def execute_turns(correct_answer):
+    try:
+        messages = None
+        curr_response = None
+        last_turn_feedback = ""
+        model_answer_extracted = None
+        final_answer = "FAIL"
+        rows = []
+        
+        # Prepare messages for the first turn
+        messages, prompt = get_messages(turn=1)
 
-        curr_response = get_response_together(prompt, messages)
+        for turn in range(1, 7):
+            curr_response = await get_response_together(prompt, messages)
 
-        is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
-
-        cnt_retries = 0
-        while final_feedback_str == "Model answer is not in the correct format":
-            logger.info(f"Model answer is not in the correct format. Retrying... {cnt_retries}")
-            cnt_retries += 1
-            if cnt_retries > 3:
-                break
-            curr_response = get_response_together(prompt, messages)
             is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
 
-        if is_correct:
-            final_answer = "SUCCESS"
-            logger.info(f"Answer found in turn {turn}. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")
+            cnt_retries = 0
+            while final_feedback_str == "Model answer is not in the correct format":
+                logger.info(f"Model answer is not in the correct format for {correct_answer}. Retrying... {cnt_retries}")
+                cnt_retries += 1
+                if cnt_retries > 3:
+                    break
+                curr_response = await get_response_together(prompt, messages)
+                is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
+            
+            if is_correct:
+                final_answer = "SUCCESS"
+                logger.info(f"Answer found in turn {turn} for {correct_answer}. Final word: {model_answer_extracted}")
 
-        past_response = model_think_extracted + "\n\n" + "<guess>" + model_answer_extracted + "</guess>"
-        last_turn_feedback += "\n" + final_feedback_str
+            # Store all data for the current turn
+            curr_row = {
+                "model_name": model_name,
+                "turn": turn,
+                "correct_answer": correct_answer,
+                "prompt": prompt,
+                "messages": messages.copy(),
+                "response": curr_response,
+                "model_answer": model_answer_extracted,
+                "model_think": model_think_extracted,
+                "feedback": final_feedback_str,
+                "curr_answer": final_answer,
+            }
+            rows.append(curr_row)
 
-        curr_row = row.copy()
-        curr_row["model_name"] = model_name
-        curr_row["turn"] = turn
-        curr_row["correct_answer"] = correct_answer
-        curr_row["prompt"] = prompt
-        curr_row["messages"] = messages.copy()
-        curr_row["response"] = curr_response
-        curr_row["model_answer"] = model_answer_extracted
-        curr_row["model_think"] = model_think_extracted
-        curr_row["feedback"] = final_feedback_str
-        curr_row["curr_answer"] = final_answer
+            if is_correct:
+                break
 
-        rows.append(curr_row.copy())
+            # If not correct and not the last turn, prepare for the next turn
+            if turn < 6:
+                past_response = model_think_extracted + "\n\n" + "<guess>" + model_answer_extracted + "</guess>"
+                last_turn_feedback += "\n" + final_feedback_str
+                messages, prompt = get_messages(turn=turn + 1, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback)
 
-        if is_correct:
-            break
-    else:
-        logger.info(f"Answer not found. Final word: {model_answer_extracted}. Correct answer: {correct_answer}")
-        final_answer = "FAIL"
+        else:
+            logger.info(f"Answer not found for {correct_answer}. Final word: {model_answer_extracted}")
+            final_answer = "FAIL"
 
-    df_wordle_data = pd.DataFrame(rows)
-    df_wordle_data.to_csv(f"{model_data_dir}/wordle_data_{correct_answer}.csv", index=False)
+        df_wordle_data = pd.DataFrame(rows)
+        df_wordle_data.to_csv(f"{model_data_dir}/wordle_data_{correct_answer}.csv", index=False)
+        logger.info(f"Successfully processed word: {correct_answer}")
+        return correct_answer
+    
+    except Exception as e:
+        if "InternalServerError" in str(type(e)) or "InternalServerError" in str(e):
+            logger.warning(f"InternalServerError encountered for word {correct_answer}. Skipping...")
+        else:
+            logger.error(f"Error processing word {correct_answer}: {e}")
+        return None
 
-    return
+async def process_word_chunk(words_chunk):
+    """Process a chunk of words in parallel"""
+    logger.info(f"Processing chunk of {len(words_chunk)} words: {words_chunk}")
+    words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in words_chunk]
+    tasks = [execute_turns(word) for word in words_chunk_randomcase]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    successful_words = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Exception for word {words_chunk[i]}: {result}")
+        elif result is not None:
+            successful_words.append(result)
+    
+    logger.info(f"Successfully processed {len(successful_words)} out of {len(words_chunk)} words in chunk")
+    return successful_words
+
+async def main():
+    """Main function to process 500 words in chunks of 10"""
+    # Load word list
+    with open('../data/word_list.txt', 'r') as f:
+        word_list = f.read().splitlines()
+    
+    # Sample 500 words randomly
+    # sample_words = random.sample(word_list, min(10, len(word_list)))
+    sample_words = ["xywza"]
+    logger.info(f"Selected {len(sample_words)} words to process")
+    
+    # Process words in chunks of 10
+    chunk_size = 10
+    all_successful_words = []
+    
+    for i in range(0, len(sample_words), chunk_size):
+        chunk = sample_words[i:i + chunk_size]
+        logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_words) + chunk_size - 1)//chunk_size}")
+        
+        successful_words = await process_word_chunk(chunk)
+        all_successful_words.extend(successful_words)
+        
+        # Small delay between chunks to avoid overwhelming the API
+        await asyncio.sleep(1)
+    
+    logger.info(f"Total processing complete. Successfully processed {len(all_successful_words)} out of {len(sample_words)} words")
+    
+    # Save summary
+    summary_df = pd.DataFrame({
+        'processed_words': all_successful_words,
+        'model_name': [model_name] * len(all_successful_words)
+    })
+    summary_df.to_csv(f"{model_data_dir}/processing_summary.csv", index=False)
+    logger.info(f"Summary saved to {model_data_dir}/processing_summary.csv")
 
 if __name__ == "__main__":
-    word_list = open('../data/word_list.txt').read().splitlines()
-
-    correct_answer = "APPLE"
-    execute_turns(correct_answer)
+    asyncio.run(main())
