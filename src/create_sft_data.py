@@ -26,8 +26,8 @@ else:
             base_url="http://localhost:9200/v1",
         )
 
-# model_name = "moonshotai/Kimi-K2-Instruct"
-model_name = "deepseek-ai/DeepSeek-R1-0528"
+model_name = "moonshotai/Kimi-K2-Instruct"
+# model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
 
 hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
