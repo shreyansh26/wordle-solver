@@ -13,4 +13,6 @@ with open(LOG_FILE_PATH) as f:
                 continue
             word_errors.add(word_error)
 
-print(sorted(list(word_errors)))
+word_errors = sorted(list(word_errors))
+print(word_errors)
+print(len(word_errors))
