@@ -96,8 +96,20 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 
     records = []
+    train_records = []
+    val_records = []
 
-    for word in df['word'].unique():
+    num_unique_words = df['word'].nunique()
+    num_unique_words_train = int(num_unique_words * 0.8)
+    num_unique_words_val = num_unique_words - num_unique_words_train
+    unique_words = df['word'].unique()
+    random.shuffle(unique_words)
+    print("Num unique words:", num_unique_words)
+    print("Num unique words train:", num_unique_words_train)
+    print("Num unique words val:", num_unique_words_val)
+
+    print(f"Using {num_unique_words_train} words for train and {num_unique_words_val} words for val")
+    for word in unique_words[:num_unique_words_train]:
         df_t = pd.read_csv(os.path.join(DATASET_DIR, f'wordle_data_{word}.csv'))
         df_t['messages'] = df_t['messages'].apply(ast.literal_eval)
         df_t['correct_answer'] = df_t['correct_answer'].apply(str)
@@ -106,15 +118,30 @@ if __name__ == "__main__":
             formatted_example = get_formatted_training_example(row, tokenizer)
             if formatted_example is not None:   
                 records.append(formatted_example)
+                train_records.append(formatted_example)
+
+    for word in unique_words[num_unique_words_train:]:
+        df_t = pd.read_csv(os.path.join(DATASET_DIR, f'wordle_data_{word}.csv'))
+        df_t['messages'] = df_t['messages'].apply(ast.literal_eval)
+        df_t['correct_answer'] = df_t['correct_answer'].apply(str)
+        df_t['response'] = df_t['response'].apply(str)
+        for _, row in df_t.iterrows():
+            formatted_example = get_formatted_training_example(row, tokenizer)
+            if formatted_example is not None:   
+                records.append(formatted_example)
+                val_records.append(formatted_example)
 
     random.shuffle(records)
+    random.shuffle(train_records)
+    random.shuffle(val_records)
+
     print("Num rows:", len(records))
     dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data.jsonl')
 
-    rows_train = records[:2500]
+    rows_train = train_records
     print("Num rows train:", len(rows_train))
     dump_to_jsonl(rows_train, '../data/sft/train/moonshot_kimi_k2_data_train.jsonl')
 
-    rows_val = records[2500:]
+    rows_val = val_records
     print("Num rows val:", len(rows_val))
     dump_to_jsonl(rows_val, '../data/sft/train/moonshot_kimi_k2_data_val.jsonl')
