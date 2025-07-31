@@ -13,26 +13,7 @@ from logging_utils import get_logger
 # Load HF_HOME
 load_dotenv()
 
-USE_TOGETHER_MODELS = True
-USE_FIREWORKS_MODELS = False
-
-assert not (USE_TOGETHER_MODELS and USE_FIREWORKS_MODELS), "Both Together and Fireworks models cannot be used at the same time"
-
-if USE_TOGETHER_MODELS:
-    client = AsyncOpenAI(
-            api_key=TOGETHER_API_KEY,
-            base_url="https://api.together.xyz/v1",
-        )
-elif USE_FIREWORKS_MODELS:
-    client = AsyncOpenAI(
-            api_key=FIREWORKS_API_KEY,
-            base_url="https://api.fireworks.ai/inference/v1",
-        )
-else:
-    client = AsyncOpenAI(
-            api_key="EMPTY",
-            base_url="http://localhost:9200/v1",
-        )
+response_provider = "together"
 
 # model_name = "moonshotai/Kimi-K2-Instruct"
 model_name = "deepseek-ai/DeepSeek-R1-0528"
@@ -40,9 +21,9 @@ model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "accounts/fireworks/models/qwen3-235b-a22b-instruct-2507"
 # model_name = "accounts/fireworks/models/glm-4p5"
 
-if USE_TOGETHER_MODELS:
+if response_provider == "together":
     hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
-elif USE_FIREWORKS_MODELS:
+elif response_provider == "fireworks":
     # Set manually for any run
     hf_model_name = "Qwen/Qwen3-235B-A22B"
 else:
@@ -54,6 +35,13 @@ logger = get_logger(f"create_sft_data_{model_name.replace('/', '_')}")
 os.makedirs(model_data_dir, exist_ok=True)
 
 tokenizer = AutoTokenizer.from_pretrained(hf_model_name, trust_remote_code=True)
+
+class SamplingParams:
+    def __init__(self, temperature=0.6, top_p=0.95, top_k=20, min_p=0):
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.min_p = min_p
 
 def check_answer_format(answer):
     pattern_guess = re.compile("<guess>(.*?)</guess>", re.DOTALL)
@@ -122,18 +110,18 @@ def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=N
     )
     return messages, prompt
 
-async def get_response(prompt, messages, model_name):
+async def get_response(prompt, messages, model_name, client=None, sampling_params=None):
     completion = await client.completions.create(
         model=model_name,
         prompt=prompt,
         max_tokens=8192,
-        temperature=0.6,
-        top_p=0.95,
-        extra_body={"top_k": 20, "min_p": 0}
+        temperature=sampling_params.temperature if sampling_params is not None else 0.6,
+        top_p=sampling_params.top_p if sampling_params is not None else 0.95,
+        extra_body={"top_k": sampling_params.top_k if sampling_params is not None else 20, "min_p": sampling_params.min_p if sampling_params is not None else 0}
     )
     return completion.choices[0].text
 
-async def get_response_together(prompt, messages, model_name):
+async def get_response_together(prompt, messages, model_name, client=None, sampling_params=None):
     completion = await client.chat.completions.create(
         model=model_name,
         messages=messages,
@@ -142,7 +130,7 @@ async def get_response_together(prompt, messages, model_name):
     )
     return completion.choices[0].message.content
 
-async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=False, response_provider="together"):
+async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=False, response_provider="together", client=None, sampling_params=None, model_data_dir=None):
     if response_provider == "together":
         get_response_fn = get_response_together
     elif response_provider == "fireworks":
@@ -152,8 +140,6 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
     else:
         raise ValueError(f"Invalid response provider: {response_provider}")
 
-    print(f"Using {response_provider} for response provider")
-
     try:
         messages = None
         curr_response = None
@@ -161,6 +147,7 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
         model_answer_extracted = None
         final_answer = "FAIL"
         rows = []
+        total_retries = 0
         
         # Prepare messages for the first turn
         messages, prompt = get_messages(turn=1, tokenizer=tokenizer)
@@ -170,7 +157,7 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
                 print(f"Turn {turn}: {prompt}")
                 print("-"*100)
 
-            curr_response = await get_response_fn(prompt, messages, model_name)
+            curr_response = await get_response_fn(prompt, messages, model_name, client=client, sampling_params=sampling_params)
             is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
 
             if verbose:
@@ -186,7 +173,7 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
                 cnt_retries += 1
                 if cnt_retries > 3:
                     break
-                curr_response = await get_response_fn(prompt, messages, model_name)
+                curr_response = await get_response_fn(prompt, messages, model_name, client=client, sampling_params=sampling_params)
                 is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
                 if verbose:
                     print(f"Response: {curr_response}")
@@ -194,6 +181,8 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
                     print(f"Feedback: {final_feedback_str}")
                     print("="*50)
                     print("-"*100)
+
+            total_retries += cnt_retries
             
             if is_correct:
                 final_answer = "SUCCESS"
@@ -228,22 +217,23 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
             final_answer = "FAIL"
 
         df_wordle_data = pd.DataFrame(rows)
+
         df_wordle_data.to_csv(f"{model_data_dir}/wordle_data_{correct_answer}.csv", index=False)
         logger.info(f"Successfully processed word: {correct_answer}")
-        return correct_answer
+        return correct_answer, total_retries, final_answer, turn
     
     except Exception as e:
         if "InternalServerError" in str(type(e)) or "InternalServerError" in str(e):
             logger.warning(f"InternalServerError encountered for word {correct_answer}. Skipping...")
         else:
             logger.error(f"Error processing word {correct_answer}: {e}")
-        return None
+        return None, None
 
-async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=False):
+async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=False, client=None, sampling_params=None, model_data_dir=None):
     """Process a chunk of words in parallel"""
     logger.info(f"Processing chunk of {len(words_chunk)} words: {words_chunk}")
     words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in words_chunk]
-    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together") for word in words_chunk_randomcase]
+    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in words_chunk_randomcase]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     successful_words = []
@@ -257,23 +247,52 @@ async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=Fa
     return successful_words
 
 async def main():
+    if response_provider == "together":
+        client = AsyncOpenAI(
+                api_key=TOGETHER_API_KEY,
+                base_url="https://api.together.xyz/v1",
+            )
+    elif response_provider == "fireworks":
+        client = AsyncOpenAI(
+                api_key=FIREWORKS_API_KEY,
+                base_url="https://api.fireworks.ai/inference/v1",
+            )
+    else:
+        client = AsyncOpenAI(
+                api_key="EMPTY",
+                base_url="http://localhost:9200/v1",
+            )
+    if response_provider == "local":
+        sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
+    else:
+        sampling_params = None
     # Load word list
     with open('../data/word_list.txt', 'r') as f:
         word_list = f.read().splitlines()
     
     # Sample words randomly
-    sample_words = random.sample(word_list, min(2, len(word_list)))
+    sample_words = random.sample(word_list, min(1000, len(word_list)))
     logger.info(f"Selected {len(sample_words)} words to process")
     
     chunk_size = 20
     all_successful_words = []
+    retry_count_list = []
+    turn_count_list = []
+    success_failure_list = []
     
     for i in range(0, len(sample_words), chunk_size):
         chunk = sample_words[i:i + chunk_size]
         logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_words) + chunk_size - 1)//chunk_size}")
         
-        successful_words = await process_word_chunk(chunk, model_name, tokenizer=tokenizer)
+        successful_words_and_retry_count = await process_word_chunk(chunk, model_name, tokenizer=tokenizer, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
+        successful_words = [x[0] for x in successful_words_and_retry_count]
+        retry_count = [x[1] for x in successful_words_and_retry_count]
+        turn_count = [x[2] for x in successful_words_and_retry_count]
+        success_failure = [x[3] for x in successful_words_and_retry_count]
         all_successful_words.extend(successful_words)
+        retry_count_list.extend(retry_count)
+        turn_count_list.extend(turn_count)
+        success_failure_list.extend(success_failure)
         
         # Small delay between chunks to avoid overwhelming the API
         await asyncio.sleep(1)
@@ -283,7 +302,10 @@ async def main():
     # Save summary
     summary_df = pd.DataFrame({
         'processed_words': all_successful_words,
-        'model_name': [model_name] * len(all_successful_words)
+        'model_name': [model_name] * len(all_successful_words),
+        'retry_count': retry_count_list,
+        'turn_count': turn_count_list,
+        'success_failure': success_failure_list
     })
     summary_df.to_csv(f"{model_data_dir}/processing_summary.csv", index=False)
     logger.info(f"Summary saved to {model_data_dir}/processing_summary.csv")
