@@ -7,6 +7,12 @@ from transformers import AutoTokenizer
 
 random.seed(1337)
 
+def dump_to_jsonl(records, path):
+    with open(path, 'w') as outfile:
+        for entry in records:
+            json.dump(entry, outfile)
+            outfile.write('\n')
+
 def get_formatted_training_example(row, tokenizer):
     messages = row['messages']
     assert isinstance(messages, list)
@@ -51,7 +57,12 @@ if __name__ == "__main__":
 
     random.shuffle(records)
     print("Num rows:", len(records))
-    with open('../data/sft/train/moonshot_kimi_k2_data.jsonl', 'w') as outfile:
-        for entry in records:
-            json.dump(entry, outfile)
-            outfile.write('\n')
+    dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data.jsonl')
+
+    rows_train = records[:2500]
+    print("Num rows train:", len(rows_train))
+    dump_to_jsonl(rows_train, '../data/sft/train/moonshot_kimi_k2_data_train.jsonl')
+
+    rows_val = records[2500:]
+    print("Num rows val:", len(rows_val))
+    dump_to_jsonl(rows_val, '../data/sft/train/moonshot_kimi_k2_data_val.jsonl')
