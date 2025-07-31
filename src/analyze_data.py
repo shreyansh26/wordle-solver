@@ -20,4 +20,4 @@ for file in files:
     rows.append(row)
 
 df = pd.DataFrame(rows)
-df.to_csv('../data/sft/moonshot_kimi_k2_summary.csv', index=False)
+df.to_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', index=False)
