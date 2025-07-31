@@ -34,8 +34,8 @@ else:
             base_url="http://localhost:9200/v1",
         )
 
-model_name = "moonshotai/Kimi-K2-Instruct"
-# model_name = "deepseek-ai/DeepSeek-R1-0528"
+# model_name = "moonshotai/Kimi-K2-Instruct"
+model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
 # model_name = "accounts/fireworks/models/qwen3-235b-a22b-instruct-2507"
 # model_name = "accounts/fireworks/models/glm-4p5"
@@ -101,7 +101,7 @@ def check_answer(turn, model_answer, correct_answer):
     else:
         return False, final_feedback_str, model_answer_extracted, model_think_extracted
 
-def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=None):
+def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=None, tokenizer=None):
     assert (turn == 1 and messages is None) or (turn > 1 and messages is not None)
     if turn == 1:
         messages = [
@@ -122,7 +122,7 @@ def get_messages(turn=1, messages=None, past_response=None, last_turn_feedback=N
     )
     return messages, prompt
 
-async def get_response(prompt, messages):
+async def get_response(prompt, messages, model_name):
     completion = await client.completions.create(
         model=model_name,
         prompt=prompt,
@@ -133,7 +133,7 @@ async def get_response(prompt, messages):
     )
     return completion.choices[0].text
 
-async def get_response_together(prompt, messages):
+async def get_response_together(prompt, messages, model_name):
     completion = await client.chat.completions.create(
         model=model_name,
         messages=messages,
@@ -142,7 +142,18 @@ async def get_response_together(prompt, messages):
     )
     return completion.choices[0].message.content
 
-async def execute_turns(correct_answer):
+async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=False, response_provider="together"):
+    if response_provider == "together":
+        get_response_fn = get_response_together
+    elif response_provider == "fireworks":
+        get_response_fn = get_response_together
+    elif response_provider == "local":
+        get_response_fn = get_response
+    else:
+        raise ValueError(f"Invalid response provider: {response_provider}")
+
+    print(f"Using {response_provider} for response provider")
+
     try:
         messages = None
         curr_response = None
@@ -152,11 +163,22 @@ async def execute_turns(correct_answer):
         rows = []
         
         # Prepare messages for the first turn
-        messages, prompt = get_messages(turn=1)
+        messages, prompt = get_messages(turn=1, tokenizer=tokenizer)
 
         for turn in range(1, 7):
-            curr_response = await get_response_together(prompt, messages)
+            if verbose:
+                print(f"Turn {turn}: {prompt}")
+                print("-"*100)
+
+            curr_response = await get_response_fn(prompt, messages, model_name)
             is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
+
+            if verbose:
+                print(f"Response: {curr_response}")
+                print("="*50)
+                print(f"Feedback: {final_feedback_str}")
+                print("="*50)
+                print("-"*100)
 
             cnt_retries = 0
             while final_feedback_str == "Model answer is not in the correct format":
@@ -164,8 +186,14 @@ async def execute_turns(correct_answer):
                 cnt_retries += 1
                 if cnt_retries > 3:
                     break
-                curr_response = await get_response_together(prompt, messages)
+                curr_response = await get_response_fn(prompt, messages, model_name)
                 is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
+                if verbose:
+                    print(f"Response: {curr_response}")
+                    print("="*50)
+                    print(f"Feedback: {final_feedback_str}")
+                    print("="*50)
+                    print("-"*100)
             
             if is_correct:
                 final_answer = "SUCCESS"
@@ -193,7 +221,7 @@ async def execute_turns(correct_answer):
             if turn < 6:
                 past_response = model_think_extracted + "\n\n" + "<guess>" + model_answer_extracted + "</guess>"
                 last_turn_feedback += "\n" + final_feedback_str
-                messages, prompt = get_messages(turn=turn + 1, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback)
+                messages, prompt = get_messages(turn=turn + 1, messages=messages, past_response=past_response, last_turn_feedback=last_turn_feedback, tokenizer=tokenizer)
 
         else:
             logger.info(f"Answer not found for {correct_answer}. Final word: {model_answer_extracted}")
@@ -211,11 +239,11 @@ async def execute_turns(correct_answer):
             logger.error(f"Error processing word {correct_answer}: {e}")
         return None
 
-async def process_word_chunk(words_chunk):
+async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=False):
     """Process a chunk of words in parallel"""
     logger.info(f"Processing chunk of {len(words_chunk)} words: {words_chunk}")
     words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in words_chunk]
-    tasks = [execute_turns(word) for word in words_chunk_randomcase]
+    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together") for word in words_chunk_randomcase]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     successful_words = []
@@ -234,7 +262,7 @@ async def main():
         word_list = f.read().splitlines()
     
     # Sample words randomly
-    sample_words = random.sample(word_list, min(1000, len(word_list)))
+    sample_words = random.sample(word_list, min(2, len(word_list)))
     logger.info(f"Selected {len(sample_words)} words to process")
     
     chunk_size = 20
@@ -244,7 +272,7 @@ async def main():
         chunk = sample_words[i:i + chunk_size]
         logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_words) + chunk_size - 1)//chunk_size}")
         
-        successful_words = await process_word_chunk(chunk)
+        successful_words = await process_word_chunk(chunk, model_name, tokenizer=tokenizer)
         all_successful_words.extend(successful_words)
         
         # Small delay between chunks to avoid overwhelming the API
