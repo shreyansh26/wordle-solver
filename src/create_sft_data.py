@@ -5,7 +5,7 @@ import random
 import pandas as pd
 from prompts import *
 from openai import AsyncOpenAI
-from api_key import TOGETHER_API_KEY
+from api_key import TOGETHER_API_KEY, FIREWORKS_API_KEY
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
 from logging_utils import get_logger
@@ -14,11 +14,19 @@ from logging_utils import get_logger
 load_dotenv()
 
 USE_TOGETHER_MODELS = True
+USE_FIREWORKS_MODELS = False
+
+assert not (USE_TOGETHER_MODELS and USE_FIREWORKS_MODELS), "Both Together and Fireworks models cannot be used at the same time"
 
 if USE_TOGETHER_MODELS:
     client = AsyncOpenAI(
             api_key=TOGETHER_API_KEY,
             base_url="https://api.together.xyz/v1",
+        )
+elif USE_FIREWORKS_MODELS:
+    client = AsyncOpenAI(
+            api_key=FIREWORKS_API_KEY,
+            base_url="https://api.fireworks.ai/inference/v1",
         )
 else:
     client = AsyncOpenAI(
@@ -29,8 +37,17 @@ else:
 model_name = "moonshotai/Kimi-K2-Instruct"
 # model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
+# model_name = "accounts/fireworks/models/qwen3-235b-a22b-instruct-2507"
+# model_name = "accounts/fireworks/models/glm-4p5"
 
-hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
+if USE_TOGETHER_MODELS:
+    hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
+elif USE_FIREWORKS_MODELS:
+    # Set manually for any run
+    hf_model_name = "Qwen/Qwen3-235B-A22B"
+else:
+    hf_model_name = model_name
+
 # Create directory for model data
 model_data_dir = os.path.join("..", "data", "sft", model_name.replace("/", "_"))
 logger = get_logger(f"create_sft_data_{model_name.replace('/', '_')}")
@@ -139,7 +156,6 @@ async def execute_turns(correct_answer):
 
         for turn in range(1, 7):
             curr_response = await get_response_together(prompt, messages)
-
             is_correct, final_feedback_str, model_answer_extracted, model_think_extracted = check_answer(turn, curr_response, correct_answer)
 
             cnt_retries = 0
