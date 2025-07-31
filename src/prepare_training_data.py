@@ -6,6 +6,8 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 random.seed(1337)
+MAX_LENGTH = 12288
+DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
 
 def dump_to_jsonl(records, path):
     with open(path, 'w') as outfile:
@@ -29,15 +31,21 @@ def get_formatted_training_example(row, tokenizer):
     formatted_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     formatted_output = f"{response}{tokenizer.eos_token}"
 
-    return {
-        "instruction": formatted_input,
-        "output": formatted_output,
-        "word": word,
-        "turn": turn,
-    }
+    complete_input = f"{formatted_input}{formatted_output}"
+    complete_input_len = len(tokenizer.encode(complete_input))
+
+    if complete_input_len > MAX_LENGTH:
+        print(f"Skipping word {word} because it's too long ({complete_input_len} > {MAX_LENGTH} tokens)")
+        return None
+    else:
+        return {
+            "instruction": formatted_input,
+            "output": formatted_output,
+            "word": word,
+            "turn": turn,
+        }
 
 if __name__ == "__main__":
-    DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
     df = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
     df = df[df['is_successful'] == "SUCCESS"]
     print("Successful words:", df.shape[0])
@@ -53,7 +61,8 @@ if __name__ == "__main__":
         df_t['response'] = df_t['response'].apply(str)
         for _, row in df_t.iterrows():
             formatted_example = get_formatted_training_example(row, tokenizer)
-            records.append(formatted_example)
+            if formatted_example is not None:   
+                records.append(formatted_example)
 
     random.shuffle(records)
     print("Num rows:", len(records))
