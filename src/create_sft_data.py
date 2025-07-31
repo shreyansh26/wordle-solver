@@ -236,15 +236,15 @@ async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=Fa
     tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in words_chunk_randomcase]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    successful_words = []
+    successful_word_results = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"Exception for word {words_chunk[i]}: {result}")
         elif result is not None:
-            successful_words.append(result)
+            successful_word_results.append(result)
     
-    logger.info(f"Successfully processed {len(successful_words)} out of {len(words_chunk)} words in chunk")
-    return successful_words
+    logger.info(f"Successfully processed {len(successful_word_results)} out of {len(words_chunk)} words in chunk")
+    return successful_word_results
 
 async def main():
     if response_provider == "together":
@@ -287,12 +287,12 @@ async def main():
         successful_words_and_retry_count = await process_word_chunk(chunk, model_name, tokenizer=tokenizer, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
         successful_words = [x[0] for x in successful_words_and_retry_count]
         retry_count = [x[1] for x in successful_words_and_retry_count]
-        turn_count = [x[2] for x in successful_words_and_retry_count]
-        success_failure = [x[3] for x in successful_words_and_retry_count]
+        success_failure = [x[2] for x in successful_words_and_retry_count]
+        turn_count = [x[3] for x in successful_words_and_retry_count]
         all_successful_words.extend(successful_words)
         retry_count_list.extend(retry_count)
-        turn_count_list.extend(turn_count)
         success_failure_list.extend(success_failure)
+        turn_count_list.extend(turn_count)
         
         # Small delay between chunks to avoid overwhelming the API
         await asyncio.sleep(1)
