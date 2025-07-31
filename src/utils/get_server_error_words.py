@@ -1,4 +1,4 @@
-LOG_FILE_PATH = "logs/create_sft_data_moonshotai_Kimi-K2-Instruct.log"
+LOG_FILE_PATH = "../logs/create_sft_data_moonshotai_Kimi-K2-Instruct.log"
 
 word_errors = set()
 

@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from collections import Counter
 
-files = os.listdir("../data/sft/moonshotai_Kimi-K2-Instruct")
+files = os.listdir("../../data/sft/moonshotai_Kimi-K2-Instruct")
 words = []
 for file in files:
     if 'wordle_data' in file:
@@ -14,11 +14,11 @@ ctr = Counter(words)
 for k, v in ctr.items():
     if v > 1:
         print(k)
-        df_lower = pd.read_csv(f'../data/sft/moonshotai_Kimi-K2-Instruct/wordle_data_{k[:-4]}.csv')
+        df_lower = pd.read_csv(f'../../data/sft/moonshotai_Kimi-K2-Instruct/wordle_data_{k[:-4]}.csv')
         # print(df_lower.shape)
         # print(df_lower.iloc[-1]['curr_answer'])
         # print("-"*50)
-        df_upper = pd.read_csv(f'../data/sft/moonshotai_Kimi-K2-Instruct/wordle_data_{k.upper()[:-4]}.csv')
+        df_upper = pd.read_csv(f'../../data/sft/moonshotai_Kimi-K2-Instruct/wordle_data_{k.upper()[:-4]}.csv')
         # print(df_upper.shape)
         # print(df_upper.iloc[-1]['curr_answer'])
         # Remove longer
