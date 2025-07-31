@@ -1,3 +1,4 @@
+import re
 import os
 import json
 import ast
@@ -15,6 +16,51 @@ def dump_to_jsonl(records, path):
             json.dump(entry, outfile)
             outfile.write('\n')
 
+def perform_validation(formatted_input, formatted_output):
+    if "<think>" not in formatted_output:
+        print("No <think> in formatted_output")
+        return False
+    if "</think>" not in formatted_output:
+        print("No </think> in formatted_output")
+        return False
+    if "<guess>" not in formatted_output:
+        print("No <guess> in formatted_output")
+        return False
+    if "</guess>" not in formatted_output:
+        print("No </guess> in formatted_output")
+        return False
+    
+    predicted_think = re.compile("<think>(.*?)</think>", re.DOTALL)
+    match_think = predicted_think.search(formatted_output)
+    if match_think is None:
+        print("Nothing between <think> and </think> in formatted_output")
+        return False
+    predicted = match_think.group(1).strip()
+    if predicted is None:
+        print("No predicted thinking in formatted_output")
+        return False
+    
+    predicted_guess = re.compile("<guess>(.*?)</guess>", re.DOTALL)
+    match_guess = predicted_guess.search(formatted_output)
+    if match_guess is None:
+        print("Nothing between <guess> and </guess> in formatted_output")
+        return False
+    predicted = match_guess.group(1).strip()
+    if predicted is None:
+        print("No predicted word in formatted_output")
+        return False
+    if len(predicted) != 5:
+        print("Predicted word is not 5 characters")
+        return False
+
+    complete_input = f"{formatted_input}{formatted_output}"
+    complete_input_len = len(tokenizer.encode(complete_input))
+
+    if complete_input_len > MAX_LENGTH:
+        return False
+
+    return True
+
 def get_formatted_training_example(row, tokenizer):
     messages = row['messages']
     assert isinstance(messages, list)
@@ -31,11 +77,8 @@ def get_formatted_training_example(row, tokenizer):
     formatted_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     formatted_output = f"{response}{tokenizer.eos_token}"
 
-    complete_input = f"{formatted_input}{formatted_output}"
-    complete_input_len = len(tokenizer.encode(complete_input))
-
-    if complete_input_len > MAX_LENGTH:
-        print(f"Skipping word {word} because it's too long ({complete_input_len} > {MAX_LENGTH} tokens)")
+    if not perform_validation(formatted_input, formatted_output):
+        print(f"Skipping word {word} because it's invalid")
         return None
     else:
         return {
