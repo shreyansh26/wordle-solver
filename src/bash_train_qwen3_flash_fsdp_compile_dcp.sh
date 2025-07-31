@@ -1,0 +1,1 @@
+torchrun --nnodes=1 --nproc-per-node=2 --master_port 29517 run_train_qwen3_fsdp.py --dcp-api
