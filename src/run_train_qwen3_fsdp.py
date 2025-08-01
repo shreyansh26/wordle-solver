@@ -320,12 +320,12 @@ if __name__ == "__main__":
     gradient_checkpointing = True
     clip_gradients = True
     shuffle = True  # multipack sampler already does random sampling
-    train_batch_size = 1 # adjust as needed
-    validation_batch_size = 1  # adjust as needed
+    train_batch_size = 2 # adjust as needed
+    validation_batch_size = 2  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
-    lr = 1e-05 # 5e-06  # adjust as needed
+    lr = 3e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
