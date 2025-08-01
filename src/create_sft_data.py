@@ -220,14 +220,14 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
 
         df_wordle_data.to_csv(f"{model_data_dir}/wordle_data_{correct_answer}.csv", index=False)
         logger.info(f"Successfully processed word: {correct_answer}")
-        return correct_answer, total_retries, final_answer, turn
+        return correct_answer, total_retries, turn, final_answer
     
     except Exception as e:
         if "InternalServerError" in str(type(e)) or "InternalServerError" in str(e):
             logger.warning(f"InternalServerError encountered for word {correct_answer}. Skipping...")
         else:
             logger.error(f"Error processing word {correct_answer}: {e}")
-        return None, None
+        return correct_answer, total_retries, turn, f"FAIL;{e}"
 
 async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=False, client=None, sampling_params=None, model_data_dir=None):
     """Process a chunk of words in parallel"""
@@ -287,12 +287,12 @@ async def main():
         successful_words_and_retry_count = await process_word_chunk(chunk, model_name, tokenizer=tokenizer, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
         successful_words = [x[0] for x in successful_words_and_retry_count]
         retry_count = [x[1] for x in successful_words_and_retry_count]
-        success_failure = [x[2] for x in successful_words_and_retry_count]
-        turn_count = [x[3] for x in successful_words_and_retry_count]
+        turn_count = [x[2] for x in successful_words_and_retry_count]
+        success_failure = [x[3] for x in successful_words_and_retry_count]
         all_successful_words.extend(successful_words)
         retry_count_list.extend(retry_count)
-        success_failure_list.extend(success_failure)
         turn_count_list.extend(turn_count)
+        success_failure_list.extend(success_failure)
         
         # Small delay between chunks to avoid overwhelming the API
         await asyncio.sleep(1)
