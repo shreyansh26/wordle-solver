@@ -7,8 +7,12 @@ def ist_time_converter(timestamp):
     return datetime.fromtimestamp(timestamp, pytz.timezone('Asia/Kolkata')).timetuple()
 
 def get_logger(filename):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(filename)
     logger.setLevel(logging.INFO)
+
+    # Check if logger already has handlers to avoid duplicates
+    if logger.handlers:
+        return logger
 
     if not os.path.exists('logs'):
         os.makedirs('logs')
