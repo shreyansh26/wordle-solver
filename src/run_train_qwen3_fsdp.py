@@ -236,6 +236,8 @@ def get_all_reduce_mean(tensor):
 def get_warmup_steps(num_training_steps, warmup_ratio=0.05):
     return math.ceil(num_training_steps * warmup_ratio)
 
+def get_decay_steps(num_training_steps, decay_ratio=0.1):
+    return math.ceil(num_training_steps * decay_ratio)
 
 def clip_model_gradients(model, max_grad_norm):
     return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm).item()
@@ -243,18 +245,36 @@ def clip_model_gradients(model, max_grad_norm):
 
 def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
     warmup_steps = get_warmup_steps(max_steps)
+    decay_steps = get_decay_steps(max_steps)
 
-    if local_rank == 0:
+    if local_rank == 0 and scheduler_type != "warmup_stable_decay":
         print(f"[WARMUP STEPS]: {warmup_steps}")
         print(f"[MAX STEPS]: {max_steps}")
         print(f"[SCHEDULER]: {scheduler_type}")
 
-    return transformers.get_scheduler(
-        name=scheduler_type,
-        optimizer=optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=max_steps,
-    )
+    if local_rank == 0 and scheduler_type == "warmup_stable_decay":
+        print(f"[WARMUP STEPS]: {warmup_steps}")
+        print(f"[DECAY STEPS]: {decay_steps}")
+        print(f"[STABLE STEPS]: {max_steps - decay_steps - warmup_steps}")
+        print(f"[MAX STEPS]: {max_steps}")
+        print(f"[SCHEDULER]: {scheduler_type}")
+
+    if scheduler_type != "warmup_stable_decay":
+        return transformers.get_scheduler(
+            name=scheduler_type,
+            optimizer=optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=max_steps,
+        )
+    else:
+        return transformers.get_wsd_schedule(
+            optimizer=optimizer,
+            num_warmup_steps=warmup_steps,
+            num_decay_steps=decay_steps,
+            num_training_steps=max_steps,
+            warmup_type="linear",
+            decay_type="cosine"
+        )
 
 
 def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, use_dcp_api):
@@ -307,7 +327,8 @@ if __name__ == "__main__":
     dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
 
     model_name = "Qwen/Qwen3-4B"
-    scheduler_type = "cosine"
+    # scheduler_type = "cosine"
+    scheduler_type = "warmup_stable_decay"
     seed = 877645  # set your seed
     transformers.set_seed(seed)
 
@@ -325,7 +346,7 @@ if __name__ == "__main__":
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
-    lr = 3e-05 # 5e-06  # adjust as needed
+    lr = 5e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
