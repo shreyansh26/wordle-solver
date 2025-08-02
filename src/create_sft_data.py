@@ -9,14 +9,16 @@ from api_key import TOGETHER_API_KEY, FIREWORKS_API_KEY
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
 from logging_utils import get_logger
+from pytz import timezone 
+from datetime import datetime
 
 # Load HF_HOME
 load_dotenv()
 
 response_provider = "together"
 
-# model_name = "moonshotai/Kimi-K2-Instruct"
-model_name = "deepseek-ai/DeepSeek-R1-0528"
+model_name = "moonshotai/Kimi-K2-Instruct"
+# model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
 # model_name = "accounts/fireworks/models/qwen3-235b-a22b-instruct-2507"
 # model_name = "accounts/fireworks/models/glm-4p5"
@@ -232,8 +234,7 @@ async def execute_turns(correct_answer, model_name, tokenizer=None, verbose=Fals
 async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=False, client=None, sampling_params=None, model_data_dir=None):
     """Process a chunk of words in parallel"""
     logger.info(f"Processing chunk of {len(words_chunk)} words: {words_chunk}")
-    words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in words_chunk]
-    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in words_chunk_randomcase]
+    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="together", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in words_chunk]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     successful_word_results = []
@@ -247,6 +248,16 @@ async def process_word_chunk(words_chunk, model_name, tokenizer=None, verbose=Fa
     return successful_word_results
 
 async def main():
+    curr_time = datetime.now(timezone("Asia/Kolkata")).strftime('%Y-%m-%d %H:%M:%S')
+    processed_words = []
+    
+    for file in os.listdir(model_data_dir):
+        if "wordle_data" in file:
+            word = file.split('wordle_data_')[1].split('.csv')[0]
+            processed_words.append(word.lower())
+    
+    processed_words = list(set(processed_words))
+    
     if response_provider == "together":
         client = AsyncOpenAI(
                 api_key=TOGETHER_API_KEY,
@@ -266,12 +277,14 @@ async def main():
         sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
     else:
         sampling_params = None
+    
     # Load word list
     with open('../data/word_list.txt', 'r') as f:
         word_list = f.read().splitlines()
     
     # Sample words randomly
-    sample_words = random.sample(word_list, min(1000, len(word_list)))
+    # sample_words = random.sample(word_list, min(1000, len(word_list)))
+    sample_words = sorted(list(set(word_list) - set(processed_words)))
     logger.info(f"Selected {len(sample_words)} words to process")
     
     chunk_size = 20
@@ -283,8 +296,8 @@ async def main():
     for i in range(0, len(sample_words), chunk_size):
         chunk = sample_words[i:i + chunk_size]
         logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_words) + chunk_size - 1)//chunk_size}")
-        
-        successful_words_and_retry_count = await process_word_chunk(chunk, model_name, tokenizer=tokenizer, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
+        words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in chunk]
+        successful_words_and_retry_count = await process_word_chunk(words_chunk_randomcase, model_name, tokenizer=tokenizer, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
         successful_words = [x[0] for x in successful_words_and_retry_count]
         retry_count = [x[1] for x in successful_words_and_retry_count]
         turn_count = [x[2] for x in successful_words_and_retry_count]
@@ -307,8 +320,8 @@ async def main():
         'turn_count': turn_count_list,
         'success_failure': success_failure_list
     })
-    summary_df.to_csv(f"{model_data_dir}/processing_summary.csv", index=False)
-    logger.info(f"Summary saved to {model_data_dir}/processing_summary.csv")
+    summary_df.to_csv(f"{model_data_dir}/processing_summary_{curr_time}.csv", index=False)
+    logger.info(f"Summary saved to {model_data_dir}/processing_summary_{curr_time}.csv")
 
 if __name__ == "__main__":
     asyncio.run(main())
