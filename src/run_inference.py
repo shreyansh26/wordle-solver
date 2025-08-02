@@ -36,8 +36,7 @@ def get_words_not_used():
 async def process_word_chunk(sample_word_list, model_name, tokenizer, verbose=False, client=None, sampling_params=None, model_data_dir=None):
     """Process a chunk of words in parallel"""
     logger.info(f"Processing chunk of {len(sample_word_list)} words: {sample_word_list}")
-    words_chunk_randomcase = [word.upper() if random.random() < 0.5 else word.lower() for word in sample_word_list]
-    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="local", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in words_chunk_randomcase]
+    tasks = [execute_turns(word, model_name, tokenizer=tokenizer, verbose=verbose, response_provider="local", client=client, sampling_params=sampling_params, model_data_dir=model_data_dir) for word in sample_word_list]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     successful_word_results = []
@@ -76,7 +75,7 @@ async def main():
     for i in range(0, len(sample_word_list), chunk_size):
         chunk = sample_word_list[i:i + chunk_size]
         logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_word_list) + chunk_size - 1)//chunk_size}")
-        
+        chunk = [word.upper() if random.random() < 0.5 else word.lower() for word in chunk]
         successful_words_and_retry_count = await process_word_chunk(chunk, MODEL_NAME, tokenizer=tokenizer, verbose=False, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
         successful_words = [x[0] for x in successful_words_and_retry_count]
         retry_count = [x[1] for x in successful_words_and_retry_count]
