@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 
 DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
 # MODEL_NAME = "Qwen/Qwen3-4B"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-07-31T22:55:24_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp/epoch_5/step_final"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-03T09:51:06_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp/epoch_5/step_final"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
@@ -53,7 +53,7 @@ async def main():
     sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
     client = AsyncOpenAI(
                 api_key="EMPTY",
-                base_url="http://localhost:9201/v1",
+                base_url="http://localhost:9203/v1",
             )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -75,7 +75,7 @@ async def main():
     for i in range(0, len(sample_word_list), chunk_size):
         chunk = sample_word_list[i:i + chunk_size]
         logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(sample_word_list) + chunk_size - 1)//chunk_size}")
-        chunk = [word.upper() if random.random() < 0.5 else word.lower() for word in chunk]
+        # chunk = [word.upper() if random.random() < 0.5 else word.lower() for word in chunk]
         successful_words_and_retry_count = await process_word_chunk(chunk, MODEL_NAME, tokenizer=tokenizer, verbose=False, client=client, sampling_params=sampling_params, model_data_dir=model_data_dir)
         successful_words = [x[0] for x in successful_words_and_retry_count]
         retry_count = [x[1] for x in successful_words_and_retry_count]
