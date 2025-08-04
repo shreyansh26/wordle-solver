@@ -7,7 +7,7 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 random.seed(1337)
-MAX_LENGTH = 32768 # 12288
+MAX_LENGTH = 16384 # 12288
 # DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
 DATASET_DIR = '../data/sft/deepseek-ai_DeepSeek-R1-0528'
 
