@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 
 DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
 # MODEL_NAME = "Qwen/Qwen3-4B"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-03T16:44:58_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp/epoch_5/step_final"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-04T00:18:05_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_wsd_decay=0.05_0.25/epoch_5/step_final"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
