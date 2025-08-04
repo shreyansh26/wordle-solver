@@ -7,8 +7,9 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 random.seed(1337)
-MAX_LENGTH = 12288
-DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
+MAX_LENGTH = 32768 # 12288
+# DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
+DATASET_DIR = '../data/sft/deepseek-ai_DeepSeek-R1-0528'
 
 def dump_to_jsonl(records, path):
     with open(path, 'w') as outfile:
@@ -89,7 +90,8 @@ def get_formatted_training_example(row, tokenizer):
         }
 
 if __name__ == "__main__":
-    df = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
+    # df = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
+    df = pd.read_csv('../data/sft/train/deepseek_r1_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
     df = df[df['is_successful'] == "SUCCESS"]
     print("Successful words:", df.shape[0])
 
@@ -136,12 +138,15 @@ if __name__ == "__main__":
     random.shuffle(val_records)
 
     print("Num rows:", len(records))
-    dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data.jsonl')
+    # dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data.jsonl')
+    dump_to_jsonl(records, '../data/sft/train/deepseek_r1_data.jsonl')
 
     rows_train = train_records
     print("Num rows train:", len(rows_train))
-    dump_to_jsonl(rows_train, '../data/sft/train/moonshot_kimi_k2_data_train.jsonl')
+    # dump_to_jsonl(rows_train, '../data/sft/train/moonshot_kimi_k2_data_train.jsonl')
+    dump_to_jsonl(rows_train, '../data/sft/train/deepseek_r1_data_train.jsonl')
 
     rows_val = val_records
     print("Num rows val:", len(rows_val))
-    dump_to_jsonl(rows_val, '../data/sft/train/moonshot_kimi_k2_data_val.jsonl')
+    # dump_to_jsonl(rows_val, '../data/sft/train/moonshot_kimi_k2_data_val.jsonl')
+    dump_to_jsonl(rows_val, '../data/sft/train/deepseek_r1_data_val.jsonl')

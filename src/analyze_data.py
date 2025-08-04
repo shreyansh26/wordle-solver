@@ -1,7 +1,8 @@
 import os
 import pandas as pd
 
-DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
+# DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
+DATASET_DIR = "../data/sft/deepseek-ai_DeepSeek-R1-0528"
 
 files = os.listdir(DATASET_DIR)
 
@@ -20,4 +21,5 @@ for file in files:
     rows.append(row)
 
 df = pd.DataFrame(rows)
-df.to_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', index=False)
+# df.to_csv('../data/sft/train/moonshot_kimi_k2_summary.csv', index=False)
+df.to_csv('../data/sft/train/deepseek_r1_summary.csv', index=False)
