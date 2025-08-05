@@ -285,9 +285,8 @@ async def main():
     # Sample words randomly
     # sample_words = random.sample(word_list, min(1000, len(word_list)))
     # sample_words = sorted(list(set(word_list) - set(processed_words)))
-    df_failed = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv')
-    df_failed_v2 = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary_v2.csv')
-    sample_words = df_failed[df_failed['is_successful'] == 'FAIL']['word'].tolist() + df_failed_v2[df_failed_v2['is_successful'] == 'FAIL']['word'].tolist()
+    df_failed = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary_v2.csv')
+    sample_words = df_failed[df_failed['is_successful'] == 'FAIL']['word'].tolist()
     logger.info(f"Selected {len(sample_words)} words to process")
     
     chunk_size = 20
