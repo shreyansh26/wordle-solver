@@ -7,9 +7,10 @@ import random
 from logging_utils import get_logger
 from transformers import AutoTokenizer
 
-DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
+# DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
+DATASET_DIR = "../data/sft/openai_gpt-oss-120b"
 # MODEL_NAME = "Qwen/Qwen3-4B"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-04T00:18:05_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_wsd_decay=0.05_0.25/epoch_5/step_final"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-06T15:29:47_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_openai_120b_sft/epoch_5/step_final"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
@@ -27,9 +28,10 @@ def get_words_not_used():
 
     words_not_used = list(set(complete_words_list) - set(words))
 
-    df_kimi_summary = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv')
+    # df_summary = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary.csv')
+    df_summary = pd.read_csv('../data/sft/train/openai_gpt_oss-120b_summary.csv')
 
-    words_failing = df_kimi_summary[df_kimi_summary['is_successful'] == "FAIL"].word.unique().tolist()
+    words_failing = df_summary[df_summary['is_successful'] == "FAIL"].word.unique().tolist()
 
     return words_not_used, words_failing
 

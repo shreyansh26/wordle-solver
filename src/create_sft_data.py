@@ -17,12 +17,12 @@ load_dotenv()
 
 response_provider = "together"
 
-# model_name = "moonshotai/Kimi-K2-Instruct"
+model_name = "moonshotai/Kimi-K2-Instruct"
 # model_name = "deepseek-ai/DeepSeek-R1-0528"
 # model_name = "Qwen/Qwen3-235B-A22B-fp8-tput"
 # model_name = "accounts/fireworks/models/qwen3-235b-a22b-instruct-2507"
 # model_name = "accounts/fireworks/models/glm-4p5"
-model_name = "openai/gpt-oss-120b"
+# model_name = "openai/gpt-oss-120b"
 
 if response_provider == "together":
     hf_model_name = model_name if "qwen3" not in model_name.lower() else "Qwen/Qwen3-235B-A22B"
@@ -286,7 +286,7 @@ async def main():
     
     # Sample words randomly
     # sample_words = random.sample(word_list, min(1000, len(word_list)))
-    sample_words = sorted(list(set(word_list) - set(processed_words)))
+    # sample_words = sorted(list(set(word_list) - set(processed_words)))
     if "kimi" in model_name.lower() and os.path.exists('../data/sft/train/moonshot_kimi_k2_summary_v2.csv'):
         df_failed = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary_v2.csv')
         sample_words = df_failed[df_failed['is_successful'] == 'FAIL']['word'].tolist()

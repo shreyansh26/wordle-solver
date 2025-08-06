@@ -327,16 +327,16 @@ if __name__ == "__main__":
     dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
 
     model_name = "Qwen/Qwen3-4B"
-    # scheduler_type = "cosine"
-    scheduler_type = "warmup_stable_decay"
+    scheduler_type = "cosine"
+    # scheduler_type = "warmup_stable_decay"
     seed = 877645  # set your seed
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_wsd_decay=0.05_0.25"
+    notes = "qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_openai_120b_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/qwen3/{run_id}"
-    max_length = 12288  # adjust as needed
+    max_length = 8192  # adjust as needed
     disable_dropout = False
     gradient_checkpointing = True
     clip_gradients = True
@@ -346,7 +346,7 @@ if __name__ == "__main__":
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
-    lr = 5e-05 # 5e-06  # adjust as needed
+    lr = 3e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
@@ -384,8 +384,10 @@ if __name__ == "__main__":
 
     optimizer = get_optimizer(model, lr, weight_decay)
     
-    train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train.jsonl"]
-    val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val.jsonl"]
+    # train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train.jsonl"]
+    # val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val.jsonl"]
+    train_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl"]
+    val_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl"]
 
     train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
     val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
