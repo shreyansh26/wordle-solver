@@ -7,10 +7,11 @@ import random
 from logging_utils import get_logger
 from transformers import AutoTokenizer
 
-# DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
-DATASET_DIR = "../data/sft/openai_gpt-oss-120b"
-# MODEL_NAME = "Qwen/Qwen3-4B"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-06T15:29:47_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_openai_120b_sft/epoch_5/step_final"
+random.seed(1337)
+DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
+# DATASET_DIR = "../data/sft/openai_gpt-oss-120b"
+MODEL_NAME = "Qwen/Qwen3-4B"
+# MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-02T18:35:41_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2/epoch_5/step_final"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
@@ -35,6 +36,16 @@ def get_words_not_used():
 
     return words_not_used, words_failing
 
+def get_words_to_test():
+    used_words_list = open('../data/word_list.txt', 'r').read().splitlines()
+    complete_word_list = open('../data/valid_wordle_words.txt', 'r').read().splitlines()
+
+    words_to_test = sorted(list(set(complete_word_list) - set(used_words_list)))
+    random.shuffle(words_to_test)
+
+    return words_to_test[:200]
+
+
 async def process_word_chunk(sample_word_list, model_name, tokenizer, verbose=False, client=None, sampling_params=None, model_data_dir=None):
     """Process a chunk of words in parallel"""
     logger.info(f"Processing chunk of {len(sample_word_list)} words: {sample_word_list}")
@@ -55,18 +66,20 @@ async def main():
     sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
     client = AsyncOpenAI(
                 api_key="EMPTY",
-                base_url="http://localhost:9202/v1",
+                base_url="http://localhost:9200/v1",
             )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     model_data_dir = os.path.join("..", "data", "sft", MODEL_NAME.replace("/", "_"))
     os.makedirs(model_data_dir, exist_ok=True)
 
-    words_not_used, words_failing = get_words_not_used()
-    print("Words not used:", len(words_not_used))
-    print("Words failing:", len(words_failing))
+    # words_not_used, words_failing = get_words_not_used()
+    # print("Words not used:", len(words_not_used))
+    # print("Words failing:", len(words_failing))
 
-    sample_word_list = words_failing
+    words_to_test = get_words_to_test()
+
+    sample_word_list = words_to_test
     chunk_size = 5
 
     all_successful_words = []
