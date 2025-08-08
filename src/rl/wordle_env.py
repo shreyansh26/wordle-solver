@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Tuple
+
+import verifiers as vf
+from verifiers.envs.multiturn_env import MultiTurnEnv
+from verifiers.types import Messages, State
+from prompts import SYSTEM_PROMPT, USER_PROMPT_SUBSEQUENT
+
+
+THINK_GUESS_SYSTEM_PROMPT = SYSTEM_PROMPT
+
+
+def parse_feedback_line(feedback: str) -> Tuple[str, str]:
+    """Parse last env feedback line like "CRANE -> G- -Y - -" into (guess, pattern).
+    Pattern chars: G=green, Y=yellow, -=grey. We tolerate spaces.
+    """
+    # Supports either:
+    #   "CRANE -> G-Y--" OR
+    #   "Guess 1: CRANE -> FEEDBACK: C(x) R(-) A(x) N(-) E(x)"
+    s = feedback.strip()
+    if "->" not in s:
+        return "", ""
+    left, right = s.split("->", 1)
+    guess = left.split(":")[-1].strip().split()[0].strip().lower()
+    # Try compact G/Y/- form
+    compact = re.sub(r"[^GY-]", "", right.upper())
+    if len(compact) == 5:
+        return guess, compact
+    # Try token form like B(✓) R(-) ... -> map to G/Y/-
+    token_pattern = []
+    for token in right.split():
+        m = re.search(r"\((.)\)", token)
+        if not m:
+            continue
+        sym = m.group(1)
+        if sym == "✓":
+            token_pattern.append("G")
+        elif sym == "-":
+            token_pattern.append("Y")
+        elif sym in {"x", "X"}:
+            token_pattern.append("-")
+    pattern = "".join(token_pattern)
+    return guess, pattern if len(pattern) == 5 else (guess, "")
+
+
+def build_constraints_from_history(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute letter constraints from past (guess, pattern) pairs.
+    Returns dict with:
+      - fixed_positions: dict[pos]->char
+      - excluded_positions: dict[pos]->set(chars)
+      - required_letters: multiset as dict[char]->min_count
+      - excluded_letters: set(chars that cannot appear at all)
+    """
+    fixed_positions: Dict[int, str] = {}
+    excluded_positions: Dict[int, set[str]] = {}
+    required_letters: Dict[str, int] = {}
+    excluded_letters: set[str] = set()
+
+    # Track min occurrences by counting Y/G per letter across all turns minus fixed positions
+    for turn in history:
+        guess = turn.get("guess", "").lower()
+        fb = turn.get("feedback", "")
+        # Support either Wordle-letter-coded string or compact code; accept both forms
+        # Expected forms examples:
+        #   "CRANE -> G-Y--" or "c r a n e\nGY- - -" etc. We'll try simple parser first.
+        if turn.get("pattern"):
+            pattern = turn["pattern"].upper()
+        elif "->" in fb:
+            _, pattern = parse_feedback_line(fb)
+        else:
+            # normalize tokens G/Y/- only
+            pattern = re.sub(r"[^GY-]", "", fb.upper())
+        if len(guess) != 5 or len(pattern) != 5:
+            continue
+
+        # per-letter accounting to avoid marking a letter fully excluded if it had Y/G
+        letter_has_positive: Dict[str, bool] = {}
+        for i, (gch, pch) in enumerate(zip(guess, pattern)):
+            if pch == "G":
+                fixed_positions[i] = gch
+                letter_has_positive[gch] = True
+                required_letters[gch] = max(required_letters.get(gch, 0), 1)
+            elif pch == "Y":
+                excluded_positions.setdefault(i, set()).add(gch)
+                letter_has_positive[gch] = True
+                required_letters[gch] = max(required_letters.get(gch, 0), 1)
+            elif pch == "-":
+                excluded_positions.setdefault(i, set()).add(gch)
+        for ch, pos in letter_has_positive.items():
+            pass
+        # Letters that were only '-' across all occurrences in this turn and not positive elsewhere may be excluded
+        for i, (gch, pch) in enumerate(zip(guess, pattern)):
+            if pch == "-" and not letter_has_positive.get(gch, False):
+                excluded_letters.add(gch)
+
+    return {
+        "fixed_positions": fixed_positions,
+        "excluded_positions": excluded_positions,
+        "required_letters": required_letters,
+        "excluded_letters": excluded_letters,
+    }
+
+
+def check_word_against_constraints(word: str, constraints: Dict[str, Any]) -> bool:
+    word = word.lower()
+    if len(word) != 5 or not word.isalpha():
+        return False
+    fixed = constraints["fixed_positions"]
+    ex_pos = constraints["excluded_positions"]
+    req = constraints["required_letters"]
+    ex_letters = constraints["excluded_letters"]
+
+    for pos, ch in fixed.items():
+        if word[pos] != ch:
+            return False
+    for pos, letters in ex_pos.items():
+        if word[pos] in letters:
+            return False
+    for ch, min_count in req.items():
+        if word.count(ch) < min_count:
+            return False
+    for ch in ex_letters:
+        if ch in word:
+            return False
+    return True
+
+
+def _extract_guess_from_completion(parser: vf.Parser, completion: Messages) -> str | None:
+    guess = parser.parse_answer(completion)
+    if not guess:
+        return None
+    # strip surrounding brackets if parser returns "[guess]"
+    guess = guess.strip()
+    if guess.startswith("[") and guess.endswith("]"):
+        guess = guess[1:-1]
+    return guess.lower()
+
+
+def _sft_feedback_tokens(last_guess: str, answer: str) -> Tuple[str, str]:
+    # Returns (tokens_str, pattern_str)
+    # tokens_str example: "C(x) R(-) A(x) N(-) E(x)"
+    tokens = []
+    pattern = []
+    for i, ch in enumerate(last_guess):
+        if ch == answer[i]:
+            tokens.append(f"{ch.upper()}(✓)")
+            pattern.append("G")
+        elif ch in answer:
+            tokens.append(f"{ch.upper()}(-)")
+            pattern.append("Y")
+        else:
+            tokens.append(f"{ch.upper()}(x)")
+            pattern.append("-")
+    return " ".join(tokens), "".join(pattern)
+
+
+class WordleMultiTurnEnv(MultiTurnEnv):
+    def __init__(
+        self,
+        valid_words: List[str],
+        dataset=None,
+        eval_dataset=None,
+        system_prompt: str = THINK_GUESS_SYSTEM_PROMPT,
+        max_turns: int = 6,
+        **kwargs,
+    ):
+        parser = vf.XMLParser(fields=["think", "guess"], answer_field="guess")
+        rubric = vf.Rubric(parser=parser)
+
+        # Rewards: success within <=6 turns (or early-finish bonus), format adherence, and constraint validity
+        rubric.add_reward_func(self.correct_answer_reward)
+        rubric.add_reward_func(self.early_finish_reward)
+        rubric.add_reward_func(parser.get_format_reward_func(), weight=0.2)
+        rubric.add_reward_func(self.constraint_validity_reward, weight=0.5)
+
+        super().__init__(
+            message_type="chat",
+            dataset=dataset,
+            eval_dataset=eval_dataset,
+            system_prompt=system_prompt,
+            parser=parser,
+            rubric=rubric,
+            max_turns=max_turns,
+            **kwargs,
+        )
+        self.valid_words = set(w.lower() for w in valid_words if len(w) == 5)
+
+    # ---------- Sanitization for non-increasing templates ----------
+    @staticmethod
+    def _extract_think_and_guess(raw: str) -> tuple[str, str | None]:
+        """Extract think text (without tags) and guess (inside <guess>).</n+        If no think, returns (raw_without_guess, guess).
+        """
+        # Extract guess
+        m_guess = re.search(r"<\s*guess\s*>(.*?)<\s*/\s*guess\s*>", raw, re.DOTALL | re.IGNORECASE)
+        guess = m_guess.group(1).strip() if m_guess else None
+        # Extract think block
+        m_think = re.search(r"<\s*think\s*>(.*?)<\s*/\s*think\s*>", raw, re.DOTALL | re.IGNORECASE)
+        think = m_think.group(1).strip() if m_think else ""
+        # Include any text between </think> and <guess>
+        m_between = re.search(r"</\s*think\s*>(.*?)<\s*guess\s*>", raw, re.DOTALL | re.IGNORECASE)
+        additional = m_between.group(1).strip() if m_between else ""
+        if additional:
+            think = (think + "\n\n" + additional).strip()
+        return think, guess
+
+    @classmethod
+    def _sanitize_assistant_content(cls, content: str) -> str:
+        """Remove <think> tags while preserving content and keep <guess> block, matching SFT framing.
+        This stabilizes token prefixes for models like Qwen3 whose chat templates drop <think> at re-encode time.
+        """
+        think, guess = cls._extract_think_and_guess(content)
+        if guess is None:
+            # No guess block; return original (model may have malformed output)
+            return content
+        return (think + ("\n\n" if think else "") + f"<guess>{guess}</guess>").strip()
+
+    @classmethod
+    def _sanitize_completion_chat(cls, completion: Messages) -> Messages:
+        if not isinstance(completion, list):
+            return completion
+        sanitized: list[dict] = []
+        for msg in completion:
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+                new_msg = dict(msg)
+                new_msg["content"] = cls._sanitize_assistant_content(msg["content"])
+                sanitized.append(new_msg)
+            else:
+                sanitized.append(msg)
+        return sanitized
+
+    # Override to sanitize assistant messages prior to token alignment with vLLM outputs
+    def process_env_results_vllm(
+        self,
+        prompts: list[Messages],
+        completions: list[Messages],
+        states: list[State],
+        rewards: list[float],
+        processing_class,
+        max_seq_len: int = -1,
+        mask_env_responses: bool = False,
+        mask_truncated_completions: bool = False,
+        zero_truncated_completions: bool = False,
+    ):
+        completions_sanitized = [self._sanitize_completion_chat(c) for c in completions]
+        return super().process_env_results_vllm(
+            prompts=prompts,
+            completions=completions_sanitized,
+            states=states,
+            rewards=rewards,
+            processing_class=processing_class,
+            max_seq_len=max_seq_len,
+            mask_env_responses=mask_env_responses,
+            mask_truncated_completions=mask_truncated_completions,
+            zero_truncated_completions=zero_truncated_completions,
+        )
+
+    # Safer variant that tolerates minor template differences by using longest-common-prefix instead of strict assert
+    def process_chat_format_vllm(
+        self,
+        prompt: list[dict],
+        completion: list[dict],
+        state: State,
+        processing_class,
+        mask_env_responses: bool = False,
+    ):
+        responses = state["responses"]
+        responses_idx = 0
+        zipped = []
+        for turn in completion:
+            if turn["role"] == "assistant":
+                zipped.append((turn, responses[responses_idx]))
+                responses_idx += 1
+            else:
+                zipped.append((turn, None))
+        assert len(responses) == responses_idx, "Responses not fully consumed"
+        assert len(zipped) == len(completion), "Length mismatch"
+        prompt_ids: list[int] = processing_class.apply_chat_template(
+            conversation=prompt,  # type: ignore
+            add_generation_prompt=True,
+        )
+        messages_consumed = prompt.copy()
+        prompt_mask: list[int] = [0] * len(prompt_ids)
+        completion_ids: list[int] = []
+        completion_mask: list[int] = []
+        completion_logprobs: list[float] = []
+        i = 0
+        while i < len(zipped):
+            message, response = zipped[i]
+            if message["role"] == "assistant":
+                assert response is not None, "Response should not be None"
+                # parse generated tokens/logprobs from vLLM
+                tokens = [
+                    int(t.token.split(":")[-1])
+                    for t in response.choices[0].logprobs.content
+                ]
+                logs = [lp.logprob for lp in response.choices[0].logprobs.content]
+                completion_ids.extend(tokens)
+                completion_mask.extend([1] * len(tokens))
+                completion_logprobs.extend(logs)
+                messages_consumed.append(message)
+                i += 1
+            else:
+                # accumulate consecutive non-assistant messages
+                consecutive_messages = [message]
+                j = i + 1
+                while j < len(zipped) and zipped[j][0]["role"] != "assistant":
+                    consecutive_messages.append(zipped[j][0])
+                    j += 1
+                prefix = processing_class.apply_chat_template(
+                    conversation=messages_consumed
+                )
+                with_turn = processing_class.apply_chat_template(
+                    conversation=messages_consumed + consecutive_messages
+                )
+                # longest common prefix
+                k = 0
+                kmax = min(len(prefix), len(with_turn))
+                while k < kmax and prefix[k] == with_turn[k]:
+                    k += 1
+                new_ids = with_turn[k:]
+                if mask_env_responses:
+                    new_mask = [0] * len(new_ids)
+                else:
+                    new_mask = [1] * len(new_ids)
+                completion_ids.extend(new_ids)
+                completion_mask.extend(new_mask)
+                completion_logprobs.extend([0.0] * len(new_ids))
+                messages_consumed.extend(consecutive_messages)
+                i = j
+        return (
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
+            completion_logprobs,
+        )
+
+    # ---------- Rewards ----------
+    @staticmethod
+    def correct_answer_reward(parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
+        guess = _extract_guess_from_completion(parser, completion)
+        return 1.0 if guess == answer else 0.0
+
+    @staticmethod
+    def early_finish_reward(parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
+        # 1/(turns) if success; else 0
+        assistants = [m for m in completion if isinstance(m, dict) and m.get("role") == "assistant"]
+        guess = _extract_guess_from_completion(parser, completion)
+        if guess == answer and assistants:
+            return 1.0 / max(1, len(assistants))
+        return 0.0
+
+    def constraint_validity_reward(self, parser: vf.Parser, completion: Messages, state: State, **kwargs) -> float:
+        guess = _extract_guess_from_completion(parser, completion)
+        if not guess or guess not in self.valid_words:
+            return 0.0
+        constraints = build_constraints_from_history(state.get("history", []))
+        return 1.0 if check_word_against_constraints(guess, constraints) else 0.0
+
+    # ---------- MultiTurn protocol ----------
+    def is_completed(self, messages: Messages, state: State, **kwargs) -> bool:
+        # Complete if: last assistant guess equals the answer OR reached max_turns
+        guess = _extract_guess_from_completion(self.parser, messages)
+        if guess and state.get("answer") and guess == state["answer"]:
+            return True
+        assistants = [m for m in messages if isinstance(m, dict) and m.get("role") == "assistant"]
+        return len(assistants) >= self.max_turns
+
+    def env_response(self, messages: Messages, state: State, **kwargs) -> Tuple[Messages, State]:
+        # Get last assistant guess
+        guess = _extract_guess_from_completion(self.parser, messages)
+        if not guess:
+            # Ask for a guess in the required format
+            response = [
+                {
+                    "role": "user",
+                    "content": (
+                        "Your output was invalid. Respond exactly as <guess>[crane]</guess> (with think if applicable)."
+                    ),
+                }
+            ]
+            return response, state
+
+        # Build feedback relative to answer in SFT style
+        answer: str = state["answer"]
+        tokens_str, pattern = _sft_feedback_tokens(guess, answer)
+        turn_num = state.get("turn", 0)
+        feedback = f"Guess {turn_num}: {guess} -> FEEDBACK: {tokens_str}"
+
+        # Append structured history used for constraint checking
+        hist = state.get("history", [])
+        hist.append({"guess": guess, "feedback": feedback, "pattern": pattern})
+        state["history"] = hist
+
+        # Maintain cumulative feedback string like SFT create_sft_data
+        cum = state.get("feedback_history_str", "")
+        cum = (cum + "\n" if cum else "") + feedback
+        state["feedback_history_str"] = cum
+
+        # If solved, end; else, send feedback
+        if guess == answer:
+            return [
+                {
+                    "role": "user",
+                    "content": f"Correct. Game finished in {len(hist)} turns.",
+                }
+            ], state
+        # Frame next user message as in SFT
+        return [
+            {
+                "role": "user",
+                "content": USER_PROMPT_SUBSEQUENT.format(
+                    feedback_str=state["feedback_history_str"]
+                ),
+            }
+        ], state
+
+
+def load_environment(
+    valid_words_path: str,
+    dataset: Any = None,
+    eval_dataset: Any = None,
+    use_think: bool = True,
+    max_turns: int = 6,
+):
+    valid_words = [w.strip() for w in open(valid_words_path, "r").read().splitlines() if w.strip()]
+    return WordleMultiTurnEnv(
+        valid_words=valid_words,
+        dataset=dataset,
+        eval_dataset=eval_dataset,
+        system_prompt=THINK_GUESS_SYSTEM_PROMPT if use_think else "Respond only with <guess>[word]</guess>",
+        max_turns=max_turns,
+    )
