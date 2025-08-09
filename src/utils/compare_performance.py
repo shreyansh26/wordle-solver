@@ -25,6 +25,7 @@ if __name__ == "__main__":
     df13 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_exp_2025-08-08T00:44:45_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft_epoch_5_step_final/processing_summary.csv')
     df14 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_exp_2025-08-08T00:53:20_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft_epoch_5_step_final/processing_summary.csv')
     df15 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v2_checkpoint-40/processing_summary.csv')
+    df16 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v3_checkpoint-150/processing_summary.csv')
 
     print("Qwen3 4B:", get_success_failure(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5:", get_success_failure(df2))
@@ -42,6 +43,7 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=3e-5:", get_success_failure(df13))
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=7e-5:", get_success_failure(df14))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens:", get_success_failure(df15))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens:", get_success_failure(df16))
 
     print("Qwen3 4B Average turn count for successful attempts:", get_average_turn_count(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5 Average turn count for successful attempts:", get_average_turn_count(df2))
@@ -59,6 +61,7 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=3e-5 Average turn count for successful attempts:", get_average_turn_count(df13))
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=7e-5 Average turn count for successful attempts:", get_average_turn_count(df14))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average turn count for successful attempts:", get_average_turn_count(df15))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average turn count for successful attempts:", get_average_turn_count(df16))
 
     print("Qwen3 4B Average retries for successful attempts:", get_average_retries(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5 Average retries for successful attempts:", get_average_retries(df2))
@@ -76,3 +79,4 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=3e-5 Average retries for successful attempts:", get_average_retries(df13))
     print("Qwen3 4B Finetuned Kimi K2 v2 LR=7e-5 Average retries for successful attempts:", get_average_retries(df14))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average retries for successful attempts:", get_average_retries(df15))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average retries for successful attempts:", get_average_retries(df16))
