@@ -141,21 +141,31 @@ def _extract_guess_from_completion(parser: vf.Parser, completion: Messages) -> s
 
 
 def _sft_feedback_tokens(last_guess: str, answer: str) -> Tuple[str, str]:
-    # Returns (tokens_str, pattern_str)
-    # tokens_str example: "C(x) R(-) A(x) N(-) E(x)"
-    tokens = []
-    pattern = []
-    for i, ch in enumerate(last_guess):
-        if ch == answer[i]:
+    """Safe feedback tokenization: tolerate malformed lengths.
+
+    Returns (tokens_str, pattern_str) with total length 5.
+    """
+    tokens: List[str] = []
+    pattern_chars: List[str] = []
+    g = (last_guess or "")[:5].lower()
+    a = (answer or "")[:5].lower()
+    L = min(len(g), len(a), 5)
+    for i in range(L):
+        ch = g[i]
+        if i < len(a) and ch == a[i]:
             tokens.append(f"{ch.upper()}(✓)")
-            pattern.append("G")
-        elif ch in answer:
+            pattern_chars.append("G")
+        elif ch in a:
             tokens.append(f"{ch.upper()}(-)")
-            pattern.append("Y")
+            pattern_chars.append("Y")
         else:
             tokens.append(f"{ch.upper()}(x)")
-            pattern.append("-")
-    return " ".join(tokens), "".join(pattern)
+            pattern_chars.append("-")
+    # pad to 5 if needed (shouldn't happen with valid data)
+    while len(tokens) < 5:
+        tokens.append("?(x)")
+        pattern_chars.append("-")
+    return " ".join(tokens), "".join(pattern_chars)
 
 
 class WordleMultiTurnEnv(MultiTurnEnv):
@@ -171,11 +181,13 @@ class WordleMultiTurnEnv(MultiTurnEnv):
         parser = vf.XMLParser(fields=["think", "guess"], answer_field="guess")
         rubric = vf.Rubric(parser=parser)
 
-        # Rewards: success within <=6 turns (or early-finish bonus), format adherence, and constraint validity
+        # Rewards: success within <=6 turns (or early-finish bonus), format adherence,
+        # constraint validity, and length adherence of guesses.
         rubric.add_reward_func(self.correct_answer_reward)
         rubric.add_reward_func(self.early_finish_reward)
         rubric.add_reward_func(parser.get_format_reward_func(), weight=0.2)
         rubric.add_reward_func(self.constraint_validity_reward, weight=0.5)
+        rubric.add_reward_func(self.length_adherence_reward, weight=0.1)
 
         super().__init__(
             message_type="chat",
@@ -361,6 +373,12 @@ class WordleMultiTurnEnv(MultiTurnEnv):
         constraints = build_constraints_from_history(state.get("history", []))
         return 1.0 if check_word_against_constraints(guess, constraints) else 0.0
 
+    @staticmethod
+    def length_adherence_reward(parser: vf.Parser, completion: Messages, **kwargs) -> float:
+        """Small reward for emitting exactly 5 letters in <guess> (case-insensitive)."""
+        guess = _extract_guess_from_completion(parser, completion)
+        return 1.0 if guess and len(guess) == 5 and guess.isalpha() else 0.0
+
     # ---------- MultiTurn protocol ----------
     def is_completed(self, messages: Messages, state: State, **kwargs) -> bool:
         # Complete if: last assistant guess equals the answer OR reached max_turns
@@ -386,7 +404,16 @@ class WordleMultiTurnEnv(MultiTurnEnv):
             return response, state
 
         # Build feedback relative to answer in SFT style
-        answer: str = state["answer"]
+        answer: str = state.get("answer", "")
+        # Guard against malformed answers to avoid crashing the run
+        if len(answer) != 5 or not answer.isalpha():
+            state["failed"] = True
+            return [
+                {
+                    "role": "user",
+                    "content": "Invalid puzzle state (bad answer). Skipping this example.",
+                }
+            ], state
         tokens_str, pattern = _sft_feedback_tokens(guess, answer)
         turn_num = state.get("turn", 0)
         feedback = f"Guess {turn_num}: {guess} -> FEEDBACK: {tokens_str}"

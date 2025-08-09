@@ -57,9 +57,15 @@ def load_jsonl_as_dataset(
             if "prompt" in data and "answer" in data:
                 prompt = data["prompt"]
                 answer = _normalize_word(data["answer"])
+                # Enforce valid 5-letter answers; skip invalid rows
+                if len(answer) != 5 or not answer.isalpha():
+                    continue
                 info = data.get("info", {})
             else:
                 answer = _normalize_word(data.get("word", ""))
+                # Enforce valid 5-letter answers; skip invalid rows
+                if len(answer) != 5 or not answer.isalpha():
+                    continue
                 turns = data.get("turns", [])
                 # Build a chat-style initial prompt identical to SFT framing
                 prompt = [

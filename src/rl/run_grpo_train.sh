@@ -9,7 +9,7 @@ TRAIN_JSONL=${TRAIN_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/tr
 EVAL_JSONL=${EVAL_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_use.jsonl"}
 VALID_WORDS=${VALID_WORDS:-"../data/valid_wordle_words.txt"}
 MODEL_PATH=${MODEL_PATH:-"/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-08T00:53:20_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft/epoch_5/step_final"}
-OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v1"}
+OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v4"}
 
 # vLLM server config
 VLLM_HOST=${VLLM_HOST:-"0.0.0.0"}
@@ -20,11 +20,12 @@ VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-""} # set if server model id differs
 # Training hyperparams
 BATCH=${BATCH:-1}
 EVAL_BATCH=${EVAL_BATCH:-1}
-ACC_STEPS=${ACC_STEPS:-4}
+ACC_STEPS=${ACC_STEPS:-8}
 EPOCHS=${EPOCHS:-1}
 LR=${LR:-1e-6}
-NUM_GEN=${NUM_GEN:-4}
-MAX_LEN=${MAX_LEN:-8192}
+NUM_GEN=${NUM_GEN:-8}
+MAX_SEQ_LEN=${MAX_SEQ_LEN:-4096}
+MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-24576}
 TEMP=${TEMP:-0.6}
 TOP_P=${TOP_P:-0.95}
 TOP_K=${TOP_K:-20}
@@ -38,7 +39,7 @@ ASYNC_QUEUE=${ASYNC_QUEUE:-4}
 USE_WANDB=${USE_WANDB:-1}
 WANDB_PROJECT=${WANDB_PROJECT:-"wordle_grpo_rl"}
 WANDB_ENTITY=${WANDB_ENTITY:-"shreyansh26"}
-RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v1"}
+RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v4"}
 LOG_COMPLETIONS=${LOG_COMPLETIONS:-1}
 NUM_COMPLETIONS=${NUM_COMPLETIONS:-8}
 LOG_UNIQUE=${LOG_UNIQUE:-0}
@@ -57,7 +58,8 @@ CMD=(python -m rl.train_grpo \
   --num_train_epochs "$EPOCHS" \
   --learning_rate "$LR" \
   --num_generations "$NUM_GEN" \
-  --max_seq_len "$MAX_LEN" \
+  --max_seq_len "$MAX_SEQ_LEN" \
+  --max_prompt_length "$MAX_PROMPT_LENGTH" \
   --temperature "$TEMP" --top_p "$TOP_P" --top_k "$TOP_K" --min_p "$MIN_P" \
   --use_think --max_turns 6 \
   --vllm_host "$VLLM_HOST" --vllm_port "$VLLM_PORT" --vllm_timeout "$VLLM_TIMEOUT" \

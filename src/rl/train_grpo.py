@@ -35,8 +35,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num_train_epochs", type=float, default=1.0)
     p.add_argument("--learning_rate", type=float, default=1e-6)
     p.add_argument("--logging_steps", type=int, default=10)
-    p.add_argument("--save_steps", type=int, default=20)
-    p.add_argument("--eval_steps", type=int, default=500)
+    p.add_argument("--save_steps", type=int, default=50)
+    p.add_argument("--eval_steps", type=int, default=50)
     p.add_argument("--seed", type=int, default=1337)
     # Generation / GRPO
     p.add_argument("--num_generations", type=int, default=4)
@@ -128,19 +128,19 @@ def main() -> None:
 
     # Derive prompt/completion lengths to satisfy vLLM max context
     # Ensure: max_prompt_length + max_tokens <= max_seq_len
-    if args.max_prompt_length is not None and args.max_tokens is not None:
-        eff_max_prompt_len = min(args.max_prompt_length, args.max_seq_len - 1)
-        eff_max_tokens = min(args.max_tokens, max(1, args.max_seq_len - eff_max_prompt_len))
-    elif args.max_prompt_length is not None:
-        eff_max_prompt_len = min(args.max_prompt_length, args.max_seq_len - 1)
-        eff_max_tokens = max(1, args.max_seq_len - eff_max_prompt_len)
-    elif args.max_tokens is not None:
-        eff_max_tokens = min(args.max_tokens, args.max_seq_len - 1)
-        eff_max_prompt_len = max(1, args.max_seq_len - eff_max_tokens)
-    else:
-        # Default split: 1/3 prompt, 2/3 completion (safe for long completions)
-        eff_max_prompt_len = max(256, args.max_seq_len // 3)
-        eff_max_tokens = max(1, args.max_seq_len - eff_max_prompt_len)
+    # if args.max_prompt_length is not None and args.max_tokens is not None:
+    #     eff_max_prompt_len = min(args.max_prompt_length, args.max_seq_len - 1)
+    #     eff_max_tokens = min(args.max_tokens, max(1, args.max_seq_len - eff_max_prompt_len))
+    # elif args.max_prompt_length is not None:
+    #     eff_max_prompt_len = min(args.max_prompt_length, args.max_seq_len - 1)
+    #     eff_max_tokens = max(1, args.max_seq_len - eff_max_prompt_len)
+    # elif args.max_tokens is not None:
+    #     eff_max_tokens = min(args.max_tokens, args.max_seq_len - 1)
+    #     eff_max_prompt_len = max(1, args.max_seq_len - eff_max_tokens)
+    # else:
+    #     # Default split: 1/3 prompt, 2/3 completion (safe for long completions)
+    #     eff_max_prompt_len = max(256, args.max_seq_len // 3)
+    #     eff_max_tokens = max(1, args.max_seq_len - eff_max_prompt_len)
 
     # GRPO config
     grpo_args = GRPOConfig(
@@ -159,9 +159,11 @@ def main() -> None:
 
         # Generation params
         num_generations=args.num_generations,
+        # max_seq_len=args.max_seq_len,
+        # max_prompt_length=eff_max_prompt_len,
+        # max_tokens=eff_max_tokens,
         max_seq_len=args.max_seq_len,
-        max_prompt_length=eff_max_prompt_len,
-        max_tokens=eff_max_tokens,
+        max_prompt_length=args.max_prompt_length,
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
