@@ -1,0 +1,701 @@
+model_name,turn,correct_answer,prompt,messages,response,model_answer,model_think,feedback,curr_answer
+/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150,1,porky,"<|im_start|>system
+### Game Rules:
+- You have **6 tries** to guess a secret **5-letter** word.
+- Each guess must be a valid **5-letter English word**.
+- After each guess, you will receive feedback indicating how close your guess was.
+
+### Feedback Format:
+Each letter in your guess will receive one of three symbols:
+1. ✓ : The letter is in the word and in the CORRECT position.
+2. - : The letter is in the word but in the WRONG position.
+3. x : The letter is NOT in the word.
+
+### Example:
+Secret Word: BRISK
+
+Guess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)
+Guess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)
+Guess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)
+
+### Response Format:
+Think through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.
+<|im_end|>
+<|im_start|>user
+Make your first 5-letter word guess.<|im_end|>
+<|im_start|>assistant
+","[{'role': 'system', 'content': '### Game Rules:\n- You have **6 tries** to guess a secret **5-letter** word.\n- Each guess must be a valid **5-letter English word**.\n- After each guess, you will receive feedback indicating how close your guess was.\n\n### Feedback Format:\nEach letter in your guess will receive one of three symbols:\n1. ✓ : The letter is in the word and in the CORRECT position.\n2. - : The letter is in the word but in the WRONG position.\n3. x : The letter is NOT in the word.\n\n### Example:\nSecret Word: BRISK\n\nGuess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)\nGuess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)\nGuess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)\n\n### Response Format:\nThink through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.\n'}, {'role': 'user', 'content': 'Make your first 5-letter word guess.'}]","<think>
+For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.
+</think>
+
+<guess>SLATE</guess>",SLATE,"For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.",Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x),FAIL
+/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150,2,porky,"<|im_start|>system
+### Game Rules:
+- You have **6 tries** to guess a secret **5-letter** word.
+- Each guess must be a valid **5-letter English word**.
+- After each guess, you will receive feedback indicating how close your guess was.
+
+### Feedback Format:
+Each letter in your guess will receive one of three symbols:
+1. ✓ : The letter is in the word and in the CORRECT position.
+2. - : The letter is in the word but in the WRONG position.
+3. x : The letter is NOT in the word.
+
+### Example:
+Secret Word: BRISK
+
+Guess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)
+Guess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)
+Guess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)
+
+### Response Format:
+Think through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.
+<|im_end|>
+<|im_start|>user
+Make your first 5-letter word guess.<|im_end|>
+<|im_start|>assistant
+For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.
+
+<guess>SLATE</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+<|im_end|>
+<|im_start|>assistant
+","[{'role': 'system', 'content': '### Game Rules:\n- You have **6 tries** to guess a secret **5-letter** word.\n- Each guess must be a valid **5-letter English word**.\n- After each guess, you will receive feedback indicating how close your guess was.\n\n### Feedback Format:\nEach letter in your guess will receive one of three symbols:\n1. ✓ : The letter is in the word and in the CORRECT position.\n2. - : The letter is in the word but in the WRONG position.\n3. x : The letter is NOT in the word.\n\n### Example:\nSecret Word: BRISK\n\nGuess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)\nGuess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)\nGuess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)\n\n### Response Format:\nThink through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.\n'}, {'role': 'user', 'content': 'Make your first 5-letter word guess.'}, {'role': 'assistant', 'content': 'For the first guess in Wordle, it\'s strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. \n\nSome popular strategic starting words include:\n- SLATE (contains S, L, A, T, E)\n- CRANE (contains C, R, A, N, E)\n- RAISE (contains R, A, I, S, E)\n- STARE (contains S, T, A, R, E)\n\nI\'ll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.\n\n<guess>SLATE</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\n'}]","<think>
+None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  
+That leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  
+Among these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  
+A good second guess should still use common letters but avoid the eliminated ones.  
+Candidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  
+I’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.
+</think>
+
+<guess>ROUND</guess>",ROUND,"None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  
+That leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  
+Among these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  
+A good second guess should still use common letters but avoid the eliminated ones.  
+Candidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  
+I’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.",Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x),FAIL
+/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150,3,porky,"<|im_start|>system
+### Game Rules:
+- You have **6 tries** to guess a secret **5-letter** word.
+- Each guess must be a valid **5-letter English word**.
+- After each guess, you will receive feedback indicating how close your guess was.
+
+### Feedback Format:
+Each letter in your guess will receive one of three symbols:
+1. ✓ : The letter is in the word and in the CORRECT position.
+2. - : The letter is in the word but in the WRONG position.
+3. x : The letter is NOT in the word.
+
+### Example:
+Secret Word: BRISK
+
+Guess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)
+Guess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)
+Guess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)
+
+### Response Format:
+Think through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.
+<|im_end|>
+<|im_start|>user
+Make your first 5-letter word guess.<|im_end|>
+<|im_start|>assistant
+For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.
+
+<guess>SLATE</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+<|im_end|>
+<|im_start|>assistant
+None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  
+That leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  
+Among these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  
+A good second guess should still use common letters but avoid the eliminated ones.  
+Candidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  
+I’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.
+
+<guess>ROUND</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+<|im_end|>
+<|im_start|>assistant
+","[{'role': 'system', 'content': '### Game Rules:\n- You have **6 tries** to guess a secret **5-letter** word.\n- Each guess must be a valid **5-letter English word**.\n- After each guess, you will receive feedback indicating how close your guess was.\n\n### Feedback Format:\nEach letter in your guess will receive one of three symbols:\n1. ✓ : The letter is in the word and in the CORRECT position.\n2. - : The letter is in the word but in the WRONG position.\n3. x : The letter is NOT in the word.\n\n### Example:\nSecret Word: BRISK\n\nGuess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)\nGuess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)\nGuess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)\n\n### Response Format:\nThink through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.\n'}, {'role': 'user', 'content': 'Make your first 5-letter word guess.'}, {'role': 'assistant', 'content': 'For the first guess in Wordle, it\'s strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. \n\nSome popular strategic starting words include:\n- SLATE (contains S, L, A, T, E)\n- CRANE (contains C, R, A, N, E)\n- RAISE (contains R, A, I, S, E)\n- STARE (contains S, T, A, R, E)\n\nI\'ll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.\n\n<guess>SLATE</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\n'}, {'role': 'assistant', 'content': 'None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  \nThat leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  \nAmong these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  \nA good second guess should still use common letters but avoid the eliminated ones.  \nCandidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  \nI’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.\n\n<guess>ROUND</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\n'}]","<think>
+From the feedback so far:
+
+- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.
+- Letters we know ARE in the word:
+  – O is in the word and is in the correct position (position 2).
+  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).
+
+So the pattern so far is: _ O _ _ _
+
+We need a 5-letter word that:
+1. Has O in position 2.
+2. Contains R somewhere in positions 3, 4, or 5.
+3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).
+
+Remaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.
+
+Let’s list candidate words that fit _ O _ _ _ and contain R:
+
+- COBRA (but A is eliminated)
+- CORGI (but G and I are still allowed)
+- MORPH (but H and P are allowed)
+- FORTH (but H and T are allowed, but T is eliminated)
+- BORIC (B, I, C allowed)
+- GORGE (but G and E are allowed, but E is eliminated)
+- PORGY (P, G, Y allowed)
+
+The most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.
+
+Let’s verify:
+- O is in position 2 (✓)
+- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)
+- Letters C, G, I are new and not eliminated.
+
+Thus, CORGI is a valid next guess.
+</think>
+
+<guess>CORGI</guess>",CORGI,"From the feedback so far:
+
+- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.
+- Letters we know ARE in the word:
+  – O is in the word and is in the correct position (position 2).
+  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).
+
+So the pattern so far is: _ O _ _ _
+
+We need a 5-letter word that:
+1. Has O in position 2.
+2. Contains R somewhere in positions 3, 4, or 5.
+3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).
+
+Remaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.
+
+Let’s list candidate words that fit _ O _ _ _ and contain R:
+
+- COBRA (but A is eliminated)
+- CORGI (but G and I are still allowed)
+- MORPH (but H and P are allowed)
+- FORTH (but H and T are allowed, but T is eliminated)
+- BORIC (B, I, C allowed)
+- GORGE (but G and E are allowed, but E is eliminated)
+- PORGY (P, G, Y allowed)
+
+The most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.
+
+Let’s verify:
+- O is in position 2 (✓)
+- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)
+- Letters C, G, I are new and not eliminated.
+
+Thus, CORGI is a valid next guess.",Guess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x),FAIL
+/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150,4,porky,"<|im_start|>system
+### Game Rules:
+- You have **6 tries** to guess a secret **5-letter** word.
+- Each guess must be a valid **5-letter English word**.
+- After each guess, you will receive feedback indicating how close your guess was.
+
+### Feedback Format:
+Each letter in your guess will receive one of three symbols:
+1. ✓ : The letter is in the word and in the CORRECT position.
+2. - : The letter is in the word but in the WRONG position.
+3. x : The letter is NOT in the word.
+
+### Example:
+Secret Word: BRISK
+
+Guess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)
+Guess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)
+Guess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)
+
+### Response Format:
+Think through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.
+<|im_end|>
+<|im_start|>user
+Make your first 5-letter word guess.<|im_end|>
+<|im_start|>assistant
+For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.
+
+<guess>SLATE</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+<|im_end|>
+<|im_start|>assistant
+None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  
+That leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  
+Among these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  
+A good second guess should still use common letters but avoid the eliminated ones.  
+Candidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  
+I’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.
+
+<guess>ROUND</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+<|im_end|>
+<|im_start|>assistant
+From the feedback so far:
+
+- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.
+- Letters we know ARE in the word:
+  – O is in the word and is in the correct position (position 2).
+  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).
+
+So the pattern so far is: _ O _ _ _
+
+We need a 5-letter word that:
+1. Has O in position 2.
+2. Contains R somewhere in positions 3, 4, or 5.
+3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).
+
+Remaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.
+
+Let’s list candidate words that fit _ O _ _ _ and contain R:
+
+- COBRA (but A is eliminated)
+- CORGI (but G and I are still allowed)
+- MORPH (but H and P are allowed)
+- FORTH (but H and T are allowed, but T is eliminated)
+- BORIC (B, I, C allowed)
+- GORGE (but G and E are allowed, but E is eliminated)
+- PORGY (P, G, Y allowed)
+
+The most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.
+
+Let’s verify:
+- O is in position 2 (✓)
+- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)
+- Letters C, G, I are new and not eliminated.
+
+Thus, CORGI is a valid next guess.
+
+<guess>CORGI</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+Guess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)
+<|im_end|>
+<|im_start|>assistant
+","[{'role': 'system', 'content': '### Game Rules:\n- You have **6 tries** to guess a secret **5-letter** word.\n- Each guess must be a valid **5-letter English word**.\n- After each guess, you will receive feedback indicating how close your guess was.\n\n### Feedback Format:\nEach letter in your guess will receive one of three symbols:\n1. ✓ : The letter is in the word and in the CORRECT position.\n2. - : The letter is in the word but in the WRONG position.\n3. x : The letter is NOT in the word.\n\n### Example:\nSecret Word: BRISK\n\nGuess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)\nGuess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)\nGuess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)\n\n### Response Format:\nThink through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.\n'}, {'role': 'user', 'content': 'Make your first 5-letter word guess.'}, {'role': 'assistant', 'content': 'For the first guess in Wordle, it\'s strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. \n\nSome popular strategic starting words include:\n- SLATE (contains S, L, A, T, E)\n- CRANE (contains C, R, A, N, E)\n- RAISE (contains R, A, I, S, E)\n- STARE (contains S, T, A, R, E)\n\nI\'ll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.\n\n<guess>SLATE</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\n'}, {'role': 'assistant', 'content': 'None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  \nThat leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  \nAmong these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  \nA good second guess should still use common letters but avoid the eliminated ones.  \nCandidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  \nI’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.\n\n<guess>ROUND</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\n'}, {'role': 'assistant', 'content': 'From the feedback so far:\n\n- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.\n- Letters we know ARE in the word:\n  – O is in the word and is in the correct position (position 2).\n  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).\n\nSo the pattern so far is: _ O _ _ _\n\nWe need a 5-letter word that:\n1. Has O in position 2.\n2. Contains R somewhere in positions 3, 4, or 5.\n3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).\n\nRemaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.\n\nLet’s list candidate words that fit _ O _ _ _ and contain R:\n\n- COBRA (but A is eliminated)\n- CORGI (but G and I are still allowed)\n- MORPH (but H and P are allowed)\n- FORTH (but H and T are allowed, but T is eliminated)\n- BORIC (B, I, C allowed)\n- GORGE (but G and E are allowed, but E is eliminated)\n- PORGY (P, G, Y allowed)\n\nThe most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.\n\nLet’s verify:\n- O is in position 2 (✓)\n- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)\n- Letters C, G, I are new and not eliminated.\n\nThus, CORGI is a valid next guess.\n\n<guess>CORGI</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\nGuess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)\n'}]","<think>
+From the new feedback on CORGI:
+
+- C is not in the word (x)
+- O is correct in position 2 (✓)
+- R is now correct in position 3 (✓)
+- G is not in the word (x)
+- I is not in the word (x)
+
+So far we know:
+
+Pattern: _ O R _ _
+
+Letters known to be absent: S, L, A, T, E, U, N, D, C, G, I
+
+Remaining letters that can still appear: B, F, H, J, K, M, P, Q, V, W, X, Y, Z
+
+We need two more letters (positions 1 and 4-5) using only the remaining letters.
+
+High-frequency remaining consonants: B, F, H, K, M, P, W, Y
+
+Let’s look for common 5-letter words fitting _ O R _ _ with these letters.
+
+Possible candidates:
+- BORNE – but N and E are already eliminated
+- HORSE – but S and E are eliminated
+- FORGE – but G and E are eliminated
+- MORPH – M, O, R, P, H – all letters allowed
+- WORDY – but D and Y are allowed, but D is eliminated
+- PORCH – P, O, R, C, H – but C is eliminated
+- WORRY – but W, O, R, R, Y – double R is allowed, but R is already in position 3, and we don’t know if R appears twice
+- FORTH – F, O, R, T, H – but T is eliminated
+
+The best candidate seems MORPH, which uses M, O, R, P, H – all letters are allowed and not previously eliminated.
+
+Let’s check:
+- M: allowed
+- O: correct position 2
+- R: correct position 3
+- P: allowed
+- H: allowed
+
+No conflicts. So MORPH is a valid next guess.
+</think>
+
+<guess>MORPH</guess>",MORPH,"From the new feedback on CORGI:
+
+- C is not in the word (x)
+- O is correct in position 2 (✓)
+- R is now correct in position 3 (✓)
+- G is not in the word (x)
+- I is not in the word (x)
+
+So far we know:
+
+Pattern: _ O R _ _
+
+Letters known to be absent: S, L, A, T, E, U, N, D, C, G, I
+
+Remaining letters that can still appear: B, F, H, J, K, M, P, Q, V, W, X, Y, Z
+
+We need two more letters (positions 1 and 4-5) using only the remaining letters.
+
+High-frequency remaining consonants: B, F, H, K, M, P, W, Y
+
+Let’s look for common 5-letter words fitting _ O R _ _ with these letters.
+
+Possible candidates:
+- BORNE – but N and E are already eliminated
+- HORSE – but S and E are eliminated
+- FORGE – but G and E are eliminated
+- MORPH – M, O, R, P, H – all letters allowed
+- WORDY – but D and Y are allowed, but D is eliminated
+- PORCH – P, O, R, C, H – but C is eliminated
+- WORRY – but W, O, R, R, Y – double R is allowed, but R is already in position 3, and we don’t know if R appears twice
+- FORTH – F, O, R, T, H – but T is eliminated
+
+The best candidate seems MORPH, which uses M, O, R, P, H – all letters are allowed and not previously eliminated.
+
+Let’s check:
+- M: allowed
+- O: correct position 2
+- R: correct position 3
+- P: allowed
+- H: allowed
+
+No conflicts. So MORPH is a valid next guess.",Guess 4: MORPH -> FEEDBACK: M(x) O(✓) R(✓) P(-) H(x),FAIL
+/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150,5,porky,"<|im_start|>system
+### Game Rules:
+- You have **6 tries** to guess a secret **5-letter** word.
+- Each guess must be a valid **5-letter English word**.
+- After each guess, you will receive feedback indicating how close your guess was.
+
+### Feedback Format:
+Each letter in your guess will receive one of three symbols:
+1. ✓ : The letter is in the word and in the CORRECT position.
+2. - : The letter is in the word but in the WRONG position.
+3. x : The letter is NOT in the word.
+
+### Example:
+Secret Word: BRISK
+
+Guess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)
+Guess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)
+Guess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)
+
+### Response Format:
+Think through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.
+<|im_end|>
+<|im_start|>user
+Make your first 5-letter word guess.<|im_end|>
+<|im_start|>assistant
+For the first guess in Wordle, it's strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. 
+
+Some popular strategic starting words include:
+- SLATE (contains S, L, A, T, E)
+- CRANE (contains C, R, A, N, E)
+- RAISE (contains R, A, I, S, E)
+- STARE (contains S, T, A, R, E)
+
+I'll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.
+
+<guess>SLATE</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+<|im_end|>
+<|im_start|>assistant
+None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  
+That leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  
+Among these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  
+A good second guess should still use common letters but avoid the eliminated ones.  
+Candidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  
+I’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.
+
+<guess>ROUND</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+<|im_end|>
+<|im_start|>assistant
+From the feedback so far:
+
+- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.
+- Letters we know ARE in the word:
+  – O is in the word and is in the correct position (position 2).
+  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).
+
+So the pattern so far is: _ O _ _ _
+
+We need a 5-letter word that:
+1. Has O in position 2.
+2. Contains R somewhere in positions 3, 4, or 5.
+3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).
+
+Remaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.
+
+Let’s list candidate words that fit _ O _ _ _ and contain R:
+
+- COBRA (but A is eliminated)
+- CORGI (but G and I are still allowed)
+- MORPH (but H and P are allowed)
+- FORTH (but H and T are allowed, but T is eliminated)
+- BORIC (B, I, C allowed)
+- GORGE (but G and E are allowed, but E is eliminated)
+- PORGY (P, G, Y allowed)
+
+The most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.
+
+Let’s verify:
+- O is in position 2 (✓)
+- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)
+- Letters C, G, I are new and not eliminated.
+
+Thus, CORGI is a valid next guess.
+
+<guess>CORGI</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+Guess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)
+<|im_end|>
+<|im_start|>assistant
+From the new feedback on CORGI:
+
+- C is not in the word (x)
+- O is correct in position 2 (✓)
+- R is now correct in position 3 (✓)
+- G is not in the word (x)
+- I is not in the word (x)
+
+So far we know:
+
+Pattern: _ O R _ _
+
+Letters known to be absent: S, L, A, T, E, U, N, D, C, G, I
+
+Remaining letters that can still appear: B, F, H, J, K, M, P, Q, V, W, X, Y, Z
+
+We need two more letters (positions 1 and 4-5) using only the remaining letters.
+
+High-frequency remaining consonants: B, F, H, K, M, P, W, Y
+
+Let’s look for common 5-letter words fitting _ O R _ _ with these letters.
+
+Possible candidates:
+- BORNE – but N and E are already eliminated
+- HORSE – but S and E are eliminated
+- FORGE – but G and E are eliminated
+- MORPH – M, O, R, P, H – all letters allowed
+- WORDY – but D and Y are allowed, but D is eliminated
+- PORCH – P, O, R, C, H – but C is eliminated
+- WORRY – but W, O, R, R, Y – double R is allowed, but R is already in position 3, and we don’t know if R appears twice
+- FORTH – F, O, R, T, H – but T is eliminated
+
+The best candidate seems MORPH, which uses M, O, R, P, H – all letters are allowed and not previously eliminated.
+
+Let’s check:
+- M: allowed
+- O: correct position 2
+- R: correct position 3
+- P: allowed
+- H: allowed
+
+No conflicts. So MORPH is a valid next guess.
+
+<guess>MORPH</guess><|im_end|>
+<|im_start|>user
+Make a new 5-letter word guess.
+
+Here is some previous feedback: 
+Guess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)
+Guess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)
+Guess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)
+Guess 4: MORPH -> FEEDBACK: M(x) O(✓) R(✓) P(-) H(x)
+<|im_end|>
+<|im_start|>assistant
+","[{'role': 'system', 'content': '### Game Rules:\n- You have **6 tries** to guess a secret **5-letter** word.\n- Each guess must be a valid **5-letter English word**.\n- After each guess, you will receive feedback indicating how close your guess was.\n\n### Feedback Format:\nEach letter in your guess will receive one of three symbols:\n1. ✓ : The letter is in the word and in the CORRECT position.\n2. - : The letter is in the word but in the WRONG position.\n3. x : The letter is NOT in the word.\n\n### Example:\nSecret Word: BRISK\n\nGuess 1: STORM -> Feedback: S(-) T(x) O(x) R(-) M(x)\nGuess 2: BRAVE -> Feedback: B(✓) R(✓) A(x) V(x) E(x)\nGuess 3: BRISK -> Feedback: B(✓) R(✓) I(✓) S(✓) K(✓)\n\n### Response Format:\nThink through the problem and feedback step by step. Make sure to first add your step-by-step thought process within <think> </think> tags. Then, return your guessed word in the following format: <guess> guessed-word </guess>.\n'}, {'role': 'user', 'content': 'Make your first 5-letter word guess.'}, {'role': 'assistant', 'content': 'For the first guess in Wordle, it\'s strategic to choose a word that contains common letters to maximize information gain. The most common letters in English are E, A, R, O, T, L, N, S, I, C. A good starting word should use as many of these as possible while being a valid 5-letter word. \n\nSome popular strategic starting words include:\n- SLATE (contains S, L, A, T, E)\n- CRANE (contains C, R, A, N, E)\n- RAISE (contains R, A, I, S, E)\n- STARE (contains S, T, A, R, E)\n\nI\'ll go with ""SLATE"" as it covers 5 very common letters and gives good coverage of vowels and consonants.\n\n<guess>SLATE</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\n'}, {'role': 'assistant', 'content': 'None of the letters in SLATE (S, L, A, T, E) appear in the secret word at all, so we can eliminate every word that contains any of those letters.  \nThat leaves us with a much smaller pool of consonants and vowels: B, C, D, F, G, H, I, J, K, M, N, O, P, Q, R, U, V, W, X, Y, Z.  \nAmong these, the most frequent letters are R, O, I, N, C, D, U, M, K, P.  \nA good second guess should still use common letters but avoid the eliminated ones.  \nCandidate words: ROUND, CRUMP, PRIMO, DICOT, MURKY, etc.  \nI’ll pick ROUND because it uses R, O, U, N, D—five high-frequency letters not yet ruled out.\n\n<guess>ROUND</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\n'}, {'role': 'assistant', 'content': 'From the feedback so far:\n\n- Letters we know are NOT in the word: S, L, A, T, E, U, N, D.\n- Letters we know ARE in the word:\n  – O is in the word and is in the correct position (position 2).\n  – R is in the word but in the wrong position (it was in position 1, so it must appear somewhere in positions 3, 4, or 5).\n\nSo the pattern so far is: _ O _ _ _\n\nWe need a 5-letter word that:\n1. Has O in position 2.\n2. Contains R somewhere in positions 3, 4, or 5.\n3. Uses none of the eliminated letters (S, L, A, T, E, U, N, D).\n\nRemaining high-frequency letters: I, C, G, M, P, K, H, Y, B, F, W, V, Z, Q, J, X.\n\nLet’s list candidate words that fit _ O _ _ _ and contain R:\n\n- COBRA (but A is eliminated)\n- CORGI (but G and I are still allowed)\n- MORPH (but H and P are allowed)\n- FORTH (but H and T are allowed, but T is eliminated)\n- BORIC (B, I, C allowed)\n- GORGE (but G and E are allowed, but E is eliminated)\n- PORGY (P, G, Y allowed)\n\nThe most promising is CORGI (C, O, R, G, I) – all letters are still allowed and it fits the pattern.\n\nLet’s verify:\n- O is in position 2 (✓)\n- R is in position 3 (allowed, since it was marked “wrong position” in ROUND, so it can be elsewhere)\n- Letters C, G, I are new and not eliminated.\n\nThus, CORGI is a valid next guess.\n\n<guess>CORGI</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\nGuess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)\n'}, {'role': 'assistant', 'content': 'From the new feedback on CORGI:\n\n- C is not in the word (x)\n- O is correct in position 2 (✓)\n- R is now correct in position 3 (✓)\n- G is not in the word (x)\n- I is not in the word (x)\n\nSo far we know:\n\nPattern: _ O R _ _\n\nLetters known to be absent: S, L, A, T, E, U, N, D, C, G, I\n\nRemaining letters that can still appear: B, F, H, J, K, M, P, Q, V, W, X, Y, Z\n\nWe need two more letters (positions 1 and 4-5) using only the remaining letters.\n\nHigh-frequency remaining consonants: B, F, H, K, M, P, W, Y\n\nLet’s look for common 5-letter words fitting _ O R _ _ with these letters.\n\nPossible candidates:\n- BORNE – but N and E are already eliminated\n- HORSE – but S and E are eliminated\n- FORGE – but G and E are eliminated\n- MORPH – M, O, R, P, H – all letters allowed\n- WORDY – but D and Y are allowed, but D is eliminated\n- PORCH – P, O, R, C, H – but C is eliminated\n- WORRY – but W, O, R, R, Y – double R is allowed, but R is already in position 3, and we don’t know if R appears twice\n- FORTH – F, O, R, T, H – but T is eliminated\n\nThe best candidate seems MORPH, which uses M, O, R, P, H – all letters are allowed and not previously eliminated.\n\nLet’s check:\n- M: allowed\n- O: correct position 2\n- R: correct position 3\n- P: allowed\n- H: allowed\n\nNo conflicts. So MORPH is a valid next guess.\n\n<guess>MORPH</guess>'}, {'role': 'user', 'content': 'Make a new 5-letter word guess.\n\nHere is some previous feedback: \nGuess 1: SLATE -> FEEDBACK: S(x) L(x) A(x) T(x) E(x)\nGuess 2: ROUND -> FEEDBACK: R(-) O(✓) U(x) N(x) D(x)\nGuess 3: CORGI -> FEEDBACK: C(x) O(✓) R(✓) G(x) I(x)\nGuess 4: MORPH -> FEEDBACK: M(x) O(✓) R(✓) P(-) H(x)\n'}]","<think>
+From the feedback so far:
+
+- Pattern locked: _ O R _ _
+- Letters known to be absent: S, L, A, T, E, U, N, D, C, G, I, M, H
+- Letters still possible: B, F, J, K, Q, V, W, X, Y, Z, plus P (which is in the word but not in position 4)
+
+So the word has:
+- O in position 2
+- R in position 3
+- P somewhere in positions 1 or 5 (since it was marked wrong in position 4)
+
+Remaining letters: B, F, J, K, Q, V, W, X, Y, Z
+
+We need to find a 5-letter word that fits:
+- Position 1: P or one of the remaining letters
+- Position 2: O
+- Position 3: R
+- Position 4: one of the remaining letters (but not P)
+- Position 5: P or one of the remaining letters
+
+Also, P must appear exactly once (since it was marked wrong in position 4, it must appear in 1 or 5).
+
+Possible candidates:
+- P O R _ _ : but P would be in position 1
+- _ O R _ P : P in position 5
+
+Looking at the second pattern (_ O R _ P), we need a letter for position 1 and 4 from the remaining letters (B, F, J, K, Q, V, W, X, Y, Z).
+
+Common words fitting this:
+- FOR KP? Not a word
+- POR KP? P is already in position 5
+- WOR KP? Not a word
+- BOR KP? Not a word
+- FORTH is invalid (H eliminated)
+- JOR KP? Not a word
+- KOR KP? Not a word
+- VOR KP? Not a word
+- YOR KP? Not a word
+- ZOR KP? Not a word
+
+Looking at P O R _ _:
+- P O R K _? Need a letter for position 5
+- P O R K Y - ""PORKY"" is a valid word (slang for pork)
+- P O R K S - S eliminated
+- P O R K E - E eliminated
+- P O R K Y - valid
+
+""PORKY"" uses P, O, R, K, Y - all letters are allowed.
+
+Let's check:
+- P: allowed (in position 1)
+- O: correct position 2
+- R: correct position 3
+- K: allowed
+- Y: allowed
+
+This seems to fit all constraints.
+</think>
+
+<guess>PORKY</guess>",PORKY,"From the feedback so far:
+
+- Pattern locked: _ O R _ _
+- Letters known to be absent: S, L, A, T, E, U, N, D, C, G, I, M, H
+- Letters still possible: B, F, J, K, Q, V, W, X, Y, Z, plus P (which is in the word but not in position 4)
+
+So the word has:
+- O in position 2
+- R in position 3
+- P somewhere in positions 1 or 5 (since it was marked wrong in position 4)
+
+Remaining letters: B, F, J, K, Q, V, W, X, Y, Z
+
+We need to find a 5-letter word that fits:
+- Position 1: P or one of the remaining letters
+- Position 2: O
+- Position 3: R
+- Position 4: one of the remaining letters (but not P)
+- Position 5: P or one of the remaining letters
+
+Also, P must appear exactly once (since it was marked wrong in position 4, it must appear in 1 or 5).
+
+Possible candidates:
+- P O R _ _ : but P would be in position 1
+- _ O R _ P : P in position 5
+
+Looking at the second pattern (_ O R _ P), we need a letter for position 1 and 4 from the remaining letters (B, F, J, K, Q, V, W, X, Y, Z).
+
+Common words fitting this:
+- FOR KP? Not a word
+- POR KP? P is already in position 5
+- WOR KP? Not a word
+- BOR KP? Not a word
+- FORTH is invalid (H eliminated)
+- JOR KP? Not a word
+- KOR KP? Not a word
+- VOR KP? Not a word
+- YOR KP? Not a word
+- ZOR KP? Not a word
+
+Looking at P O R _ _:
+- P O R K _? Need a letter for position 5
+- P O R K Y - ""PORKY"" is a valid word (slang for pork)
+- P O R K S - S eliminated
+- P O R K E - E eliminated
+- P O R K Y - valid
+
+""PORKY"" uses P, O, R, K, Y - all letters are allowed.
+
+Let's check:
+- P: allowed (in position 1)
+- O: correct position 2
+- R: correct position 3
+- K: allowed
+- Y: allowed
+
+This seems to fit all constraints.",Guess 5: PORKY -> FEEDBACK: P(✓) O(✓) R(✓) K(✓) Y(✓),SUCCESS
