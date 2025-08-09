@@ -1,1 +1,1 @@
-vllm serve "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-02T18:35:41_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2/epoch_5/step_final" --reasoning-parser deepseek_r1 --port 9203 --gpu-memory-utilization 0.9 --disable-log-requests
+vllm serve "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v3/checkpoint-150" --reasoning-parser deepseek_r1 --port 9203 --gpu-memory-utilization 0.9 --disable-log-requests
