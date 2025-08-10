@@ -77,6 +77,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--log_completions", action="store_true", help="Log sample prompts/completions to wandb")
     p.add_argument("--num_completions_to_print", type=int, default=8)
     p.add_argument("--wandb_log_unique_prompts", action="store_true")
+
+    # LR Scheduler
+    p.add_argument("--lr_scheduler_type", type=str, default="cosine")
+    p.add_argument("--warmup_steps", type=int, default=50)
+
     return p.parse_args()
 
 
@@ -157,6 +162,9 @@ def main() -> None:
         do_eval=eval_ds is not None,
         seed=args.seed,
 
+        lr_scheduler_type=args.lr_scheduler_type,
+        warmup_steps=args.warmup_steps,
+
         # Generation params
         num_generations=args.num_generations,
         # max_seq_len=args.max_seq_len,
@@ -173,7 +181,8 @@ def main() -> None:
 
         # Mask environment messages in loss
         mask_env_responses=True,
-        mask_truncated_completions=True,
+        # Important: avoid zero-token masks that lead to NaN KL
+        mask_truncated_completions=False,
         zero_truncated_completions=False,
 
         report_to=report_to,

@@ -9,7 +9,7 @@ TRAIN_JSONL=${TRAIN_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/tr
 EVAL_JSONL=${EVAL_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_use.jsonl"}
 VALID_WORDS=${VALID_WORDS:-"../data/valid_wordle_words.txt"}
 MODEL_PATH=${MODEL_PATH:-"/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-08T00:53:20_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft/epoch_5/step_final"}
-OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v4"}
+OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v5"}
 
 # vLLM server config
 VLLM_HOST=${VLLM_HOST:-"0.0.0.0"}
@@ -34,12 +34,14 @@ MAX_CONCURRENT=${MAX_CONCURRENT:-512}
 NUM_AHEAD=${NUM_AHEAD:-1}
 ASYNC_TIMEOUT=${ASYNC_TIMEOUT:-600}
 ASYNC_QUEUE=${ASYNC_QUEUE:-4}
+LR_SCHEDULER_TYPE=${LR_SCHEDULER_TYPE:-"cosine"}
+WARMUP_STEPS=${WARMUP_STEPS:-50}
 
 # WandB
 USE_WANDB=${USE_WANDB:-1}
 WANDB_PROJECT=${WANDB_PROJECT:-"wordle_grpo_rl"}
 WANDB_ENTITY=${WANDB_ENTITY:-"shreyansh26"}
-RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v4"}
+RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v5"}
 LOG_COMPLETIONS=${LOG_COMPLETIONS:-1}
 NUM_COMPLETIONS=${NUM_COMPLETIONS:-8}
 LOG_UNIQUE=${LOG_UNIQUE:-0}
@@ -60,6 +62,8 @@ CMD=(python -m rl.train_grpo \
   --num_generations "$NUM_GEN" \
   --max_seq_len "$MAX_SEQ_LEN" \
   --max_prompt_length "$MAX_PROMPT_LENGTH" \
+  --lr_scheduler_type "$LR_SCHEDULER_TYPE" \
+  --warmup_steps "$WARMUP_STEPS" \
   --temperature "$TEMP" --top_p "$TOP_P" --top_k "$TOP_K" --min_p "$MIN_P" \
   --use_think --max_turns 6 \
   --vllm_host "$VLLM_HOST" --vllm_port "$VLLM_PORT" --vllm_timeout "$VLLM_TIMEOUT" \
