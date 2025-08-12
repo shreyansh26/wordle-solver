@@ -27,7 +27,9 @@ if __name__ == "__main__":
     df15 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v2_checkpoint-40/processing_summary.csv')
     df16 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v3_checkpoint-150/processing_summary.csv')
     df17 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v4_checkpoint-686/processing_summary.csv')
-    df18 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v5_checkpoint-686/processing_summary.csv')
+    df18 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v5_checkpoint-300/processing_summary.csv')
+    df19 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v6_checkpoint-686/processing_summary.csv')
+    df20 = pd.read_csv('/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/_mnt_ssd2_shreyansh_models_qwen3_grpo_vllm_rl_v7_checkpoint-686/processing_summary.csv')
 
     print("Qwen3 4B:", get_success_failure(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5:", get_success_failure(df2))
@@ -48,6 +50,8 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens:", get_success_failure(df16))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens:", get_success_failure(df17))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine:", get_success_failure(df18))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine + better rewards:", get_success_failure(df19))    
+    print("Qwen3 4B Finetuned GRPO LR=3e-6; 8 Gens constant + better rewards:", get_success_failure(df20))
 
     print("Qwen3 4B Average turn count for successful attempts:", get_average_turn_count(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5 Average turn count for successful attempts:", get_average_turn_count(df2))
@@ -68,6 +72,8 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average turn count for successful attempts:", get_average_turn_count(df16))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens Average turn count for successful attempts:", get_average_turn_count(df17))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine Average turn count for successful attempts:", get_average_turn_count(df18))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine + better rewards Average turn count for successful attempts:", get_average_turn_count(df19))
+    print("Qwen3 4B Finetuned GRPO LR=3e-6; 8 Gens constant + better rewards Average turn count for successful attempts:", get_average_turn_count(df20))
 
     print("Qwen3 4B Average retries for successful attempts:", get_average_retries(df))
     # print("Qwen3 4B Finetuned Kimi K2 LR=3e-5 Average retries for successful attempts:", get_average_retries(df2))
@@ -88,3 +94,5 @@ if __name__ == "__main__":
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 4 Gens Average retries for successful attempts:", get_average_retries(df16))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens Average retries for successful attempts:", get_average_retries(df17))
     print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine Average retries for successful attempts:", get_average_retries(df18))
+    print("Qwen3 4B Finetuned GRPO LR=1e-6; 8 Gens cosine + better rewards Average retries for successful attempts:", get_average_retries(df19))
+    print("Qwen3 4B Finetuned GRPO LR=3e-6; 8 Gens constant + better rewards Average retries for successful attempts:", get_average_retries(df20))

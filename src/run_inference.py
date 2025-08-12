@@ -12,7 +12,7 @@ DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
 # DATASET_DIR = "../data/sft/openai_gpt-oss-120b"
 # MODEL_NAME = "Qwen/Qwen3-4B"
 # MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-02T18:35:41_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2/epoch_5/step_final"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v4/checkpoint-686"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
