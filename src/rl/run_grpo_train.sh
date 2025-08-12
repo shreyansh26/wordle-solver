@@ -9,7 +9,7 @@ TRAIN_JSONL=${TRAIN_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/tr
 EVAL_JSONL=${EVAL_JSONL:-"/mnt/ssd1/shreyansh/home_dir/wordle_grpo/data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_use.jsonl"}
 VALID_WORDS=${VALID_WORDS:-"../data/valid_wordle_words.txt"}
 MODEL_PATH=${MODEL_PATH:-"/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-08T00:53:20_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft/epoch_5/step_final"}
-OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v5"}
+OUT_DIR=${OUT_DIR:-"/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7"}
 
 # vLLM server config
 VLLM_HOST=${VLLM_HOST:-"0.0.0.0"}
@@ -22,7 +22,7 @@ BATCH=${BATCH:-1}
 EVAL_BATCH=${EVAL_BATCH:-1}
 ACC_STEPS=${ACC_STEPS:-8}
 EPOCHS=${EPOCHS:-1}
-LR=${LR:-1e-6}
+LR=${LR:-3e-6}
 NUM_GEN=${NUM_GEN:-8}
 MAX_SEQ_LEN=${MAX_SEQ_LEN:-4096}
 MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-24576}
@@ -34,14 +34,14 @@ MAX_CONCURRENT=${MAX_CONCURRENT:-512}
 NUM_AHEAD=${NUM_AHEAD:-1}
 ASYNC_TIMEOUT=${ASYNC_TIMEOUT:-600}
 ASYNC_QUEUE=${ASYNC_QUEUE:-4}
-LR_SCHEDULER_TYPE=${LR_SCHEDULER_TYPE:-"cosine"}
-WARMUP_STEPS=${WARMUP_STEPS:-50}
+LR_SCHEDULER_TYPE=${LR_SCHEDULER_TYPE:-"constant_with_warmup"}
+WARMUP_STEPS=${WARMUP_STEPS:-60}
 
 # WandB
 USE_WANDB=${USE_WANDB:-1}
 WANDB_PROJECT=${WANDB_PROJECT:-"wordle_grpo_rl"}
 WANDB_ENTITY=${WANDB_ENTITY:-"shreyansh26"}
-RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v5"}
+RUN_NAME=${RUN_NAME:-"grpo_vllm_rl_v7"}
 LOG_COMPLETIONS=${LOG_COMPLETIONS:-1}
 NUM_COMPLETIONS=${NUM_COMPLETIONS:-8}
 LOG_UNIQUE=${LOG_UNIQUE:-0}

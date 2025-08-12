@@ -129,11 +129,21 @@ def check_word_against_constraints(word: str, constraints: Dict[str, Any]) -> bo
     return True
 
 
+def _get_last_assistant_content(completion: Messages) -> str:
+    if not isinstance(completion, list):
+        return ""
+    for msg in reversed(completion):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            return content if isinstance(content, str) else ""
+    return ""
+
+
 def _extract_guess_from_completion(parser: vf.Parser, completion: Messages) -> str | None:
+    # Legacy fallback (kept for compatibility if called elsewhere)
     guess = parser.parse_answer(completion)
     if not guess:
         return None
-    # strip surrounding brackets if parser returns "[guess]"
     guess = guess.strip()
     if guess.startswith("[") and guess.endswith("]"):
         guess = guess[1:-1]
@@ -176,16 +186,18 @@ class WordleMultiTurnEnv(MultiTurnEnv):
         eval_dataset=None,
         system_prompt: str = THINK_GUESS_SYSTEM_PROMPT,
         max_turns: int = 6,
+        expect_think: bool | None = None,
         **kwargs,
     ):
         parser = vf.XMLParser(fields=["think", "guess"], answer_field="guess")
         rubric = vf.Rubric(parser=parser)
 
-        # Rewards: success within <=6 turns (or early-finish bonus), format adherence,
-        # constraint validity, and length adherence of guesses.
+        # Rewards: success within <=6 turns (or early-finish bonus), STRICT format adherence,
+        # constraint validity, and STRICT length adherence of guesses.
         rubric.add_reward_func(self.correct_answer_reward)
         rubric.add_reward_func(self.early_finish_reward)
-        rubric.add_reward_func(parser.get_format_reward_func(), weight=0.2)
+        # Replace library's permissive format reward with a strict variant
+        rubric.add_reward_func(self.format_strict_reward, weight=0.2)
         rubric.add_reward_func(self.constraint_validity_reward, weight=0.5)
         rubric.add_reward_func(self.length_adherence_reward, weight=0.1)
 
@@ -200,6 +212,45 @@ class WordleMultiTurnEnv(MultiTurnEnv):
             **kwargs,
         )
         self.valid_words = set(w.lower() for w in valid_words if len(w) == 5)
+        # Whether a <think> block is expected (strict check). Defaults inferred from system prompt.
+        sys_lower = (system_prompt or "").lower()
+        self.expect_think: bool = (
+            expect_think if expect_think is not None else ("<think>" in sys_lower)
+        )
+
+    # ---------- Strict formatting helpers ----------
+    def _strict_extract_guess(self, completion: Messages) -> str | None:
+        """Strictly extract guess only if the entire assistant content matches the expected format.
+
+        If `self.expect_think` is True, require:
+          ^\s*<think>...</think>\s*<guess>[ABCDE]</guess>\s*$
+        Else, require:
+          ^\s*<guess>[ABCDE]</guess>\s*$
+        """
+        content = _get_last_assistant_content(completion)
+        if not content:
+            return None
+        if self.expect_think:
+            m = re.match(
+                r"^\s*<\s*think\s*>([\s\S]*?)<\s*/\s*think\s*>\s*<\s*guess\s*>\s*([A-Za-z]{5})\s*<\s*/\s*guess\s*>\s*$",
+                content,
+                flags=re.DOTALL,
+            )
+            if not m:
+                return None
+            guess = m.group(2)
+        else:
+            m = re.match(
+                r"^\s*<\s*guess\s*>\s*([A-Za-z]{5})\s*<\s*/\s*guess\s*>\s*$",
+                content,
+            )
+            if not m:
+                return None
+            guess = m.group(1)
+        return guess.lower()
+
+    def _has_valid_strict_format(self, completion: Messages) -> bool:
+        return self._strict_extract_guess(completion) is not None
 
     # ---------- Sanitization for non-increasing templates ----------
     @staticmethod
@@ -352,37 +403,44 @@ class WordleMultiTurnEnv(MultiTurnEnv):
         )
 
     # ---------- Rewards ----------
-    @staticmethod
-    def correct_answer_reward(parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
-        guess = _extract_guess_from_completion(parser, completion)
-        return 1.0 if guess == answer else 0.0
+    def correct_answer_reward(self, parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
+        guess = self._strict_extract_guess(completion)
+        return 1.0 if guess and guess == answer else 0.0
 
-    @staticmethod
-    def early_finish_reward(parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
+    def early_finish_reward(self, parser: vf.Parser, completion: Messages, answer: str, **kwargs) -> float:
         # 1/(turns) if success; else 0
         assistants = [m for m in completion if isinstance(m, dict) and m.get("role") == "assistant"]
-        guess = _extract_guess_from_completion(parser, completion)
-        if guess == answer and assistants:
+        guess = self._strict_extract_guess(completion)
+        if guess and guess == answer and assistants:
             return 1.0 / max(1, len(assistants))
         return 0.0
 
     def constraint_validity_reward(self, parser: vf.Parser, completion: Messages, state: State, **kwargs) -> float:
-        guess = _extract_guess_from_completion(parser, completion)
+        guess = self._strict_extract_guess(completion)
         if not guess or guess not in self.valid_words:
             return 0.0
         constraints = build_constraints_from_history(state.get("history", []))
         return 1.0 if check_word_against_constraints(guess, constraints) else 0.0
 
-    @staticmethod
-    def length_adherence_reward(parser: vf.Parser, completion: Messages, **kwargs) -> float:
-        """Small reward for emitting exactly 5 letters in <guess> (case-insensitive)."""
-        guess = _extract_guess_from_completion(parser, completion)
+    def length_adherence_reward(self, parser: vf.Parser, completion: Messages, **kwargs) -> float:
+        """Give reward only if the entire assistant content strictly matches the expected tag format
+        and the <guess> contains exactly 5 letters in brackets.
+        """
+        guess = self._strict_extract_guess(completion)
         return 1.0 if guess and len(guess) == 5 and guess.isalpha() else 0.0
+
+    def format_strict_reward(self, parser: vf.Parser, completion: Messages, **kwargs) -> float:
+        """Binary reward: 1.0 only if the assistant output strictly matches the required XML format.
+
+        - With think: '<think>...</think>\n<guess>[APPLE]</guess>' and nothing else
+        - Without think: '<guess>[APPLE]</guess>' and nothing else
+        """
+        return 1.0 if self._has_valid_strict_format(completion) else 0.0
 
     # ---------- MultiTurn protocol ----------
     def is_completed(self, messages: Messages, state: State, **kwargs) -> bool:
         # Complete if: last assistant guess equals the answer OR reached max_turns
-        guess = _extract_guess_from_completion(self.parser, messages)
+        guess = self._strict_extract_guess(messages)
         if guess and state.get("answer") and guess == state["answer"]:
             return True
         assistants = [m for m in messages if isinstance(m, dict) and m.get("role") == "assistant"]
@@ -390,14 +448,20 @@ class WordleMultiTurnEnv(MultiTurnEnv):
 
     def env_response(self, messages: Messages, state: State, **kwargs) -> Tuple[Messages, State]:
         # Get last assistant guess
-        guess = _extract_guess_from_completion(self.parser, messages)
+        guess = self._strict_extract_guess(messages)
         if not guess:
             # Ask for a guess in the required format
             response = [
                 {
                     "role": "user",
                     "content": (
-                        "Your output was invalid. Respond exactly as <guess>[crane]</guess> (with think if applicable)."
+                        "Your output was invalid. Respond in EXACT XML format only.\n"
+                        + (
+                            "<think>your reasoning</think>\n<guess>apple</guess>"
+                            if self.expect_think
+                            else "<guess>apple</guess>"
+                        )
+                        + "\nNo extra text outside these tags."
                     ),
                 }
             ]
@@ -461,4 +525,5 @@ def load_environment(
         eval_dataset=eval_dataset,
         system_prompt=THINK_GUESS_SYSTEM_PROMPT if use_think else "Respond only with <guess>[word]</guess>",
         max_turns=max_turns,
+        expect_think=use_think,
     )
