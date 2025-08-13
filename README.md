@@ -2,14 +2,14 @@
 
 End-to-end pipeline to train an LLM to solve Wordle, using:
 
-- Supervised Fine-Tuning (SFT) on synthetic multi-turn traces with strict XML formatting
+- Supervised Fine-Tuning (SFT) on synthetic multi-turn traces with strict XML formatting - `<think> and </think> tags for reasoning and <guess> and </guess> tags for the final answer`
 - Group Relative Policy Optimization (GRPO) with a verifiable multi-turn Wordle environment and a vLLM rollout server
 
 The code is organized to:
 
-- Generate Wordle play traces from a strong teacher (Together/Fireworks or a local model)
+- Generate Wordle play traces from a strong teacher (hosted on Together/Fireworks or a local model)
 - Convert traces to SFT JSONL compatible with Qwen-style chat templates
-- Train an SFT model (FSDP, Flash-Attn2, optional torch.compile) on Qwen3-4B (modifiable)
+- Train an SFT model (FSDP2, Flash-Attention 2, torch.compile) on Qwen3-4B (modifiable)
 - Run GRPO over a strict Wordle environment backed by vLLM rollouts
 - Evaluate/infer and compare performance across runs
 
@@ -37,7 +37,7 @@ The code is organized to:
 - Python 3.11 or 3.12
 - CUDA 12.x GPU recommended (training Qwen3-4B with FSDP + Flash-Attn2)
 
-Core Python packages (versions known to work from logged runs):
+Core Python packages:
 
 ```
 torch==2.6.0+cu124
@@ -48,12 +48,9 @@ datasets==4.0.0
 flash_attn==2.5.8
 wandb==0.21.0
 python-dotenv==1.1.1
+verifiers==0.1.2
+vllm==0.10.0
 ```
-
-Also required for GRPO rollouts:
-
-- `vllm` (install a CUDA build matching your environment)
-- The local `verifiers` package in this repo (installed editable)
 
 Example env setup (CUDA 12.4):
 
@@ -72,10 +69,6 @@ pip install vllm
 # Install local verifiers package (provides env/trainer/server wrappers)
 pip install -e verifiers
 ```
-
-Notes:
-- If you prefer exact replication, see a captured `requirements.txt` under `src/wandb/run-*/files/requirements.txt` and mirror those pins.
-- Flash-Attn2 is optional but expected by the training config when packing is enabled.
 
 ---
 
@@ -243,21 +236,3 @@ python run_inference.py
 You can compare summary CSVs with `src/utils/compare_performance.py`
 
 ---
-
-## Minimal quickstart
-
-If you already have per-word CSVs:
-
-```bash
-# 1) Build JSONLs
-cd src && python prepare_training_data.py
-
-# 2) SFT (2 GPUs example)
-torchrun --nproc_per_node=2 src/run_train_qwen3_fsdp.py --dcp-api
-
-# 3) Start vLLM server on your SFT checkpoint
-MODEL=/path/to/sft_checkpoint bash src/rl/run_vllm_server.sh
-
-# 4) GRPO
-TRAIN_JSONL=... EVAL_JSONL=... MODEL_PATH=/path/to/sft_checkpoint bash src/rl/run_grpo_train.sh
-```
