@@ -374,7 +374,7 @@ if __name__ == "__main__":
     dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
     device = torch.device(f"cuda:{local_rank}")
 
-    model_name = "meta-llama/Llama-3.2-3B"
+    model_name = "meta-llama/Llama-3.2-3B-Instruct"
     scheduler_type = "cosine"
     # scheduler_type = "warmup_stable_decay"
     seed = 877645  # set your seed
@@ -418,8 +418,8 @@ if __name__ == "__main__":
 
     optimizer = get_optimizer(model, lr, weight_decay)
     
-    train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train.jsonl"]
-    val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val.jsonl"]
+    train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl"]
+    val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl"]
     # train_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl"]
     # val_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl"]
 
