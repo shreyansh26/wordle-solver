@@ -10,7 +10,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from utils.training_utils import _prepare_4d_causal_attention_mask
+from utils.attn_mask_utils import _prepare_4d_causal_attention_mask
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
@@ -368,7 +368,7 @@ class Transformer(nn.Module):
 
     def forward(
         self,
-        tokens: torch.Tensor,
+        input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.LongTensor | None = None,
     ):
@@ -376,7 +376,7 @@ class Transformer(nn.Module):
         Perform a forward pass through the Transformer model.
 
         Args:
-            tokens (torch.Tensor): Input token indices if pipeline parallelism is not enabled.
+            input_ids (torch.Tensor): Input token indices if pipeline parallelism is not enabled.
                 If pipeline parallelism is enabled, this will be the input token indices
                 for the ranks on the first pipeline stage. This will be the activation of the
                 previous pipeline stage if the current rank is not on the first stage.
@@ -388,7 +388,7 @@ class Transformer(nn.Module):
 
         """
         # passthrough for nonexistent layers, allows easy configuration of pipeline parallel stages
-        h = self.tok_embeddings(tokens) if self.tok_embeddings else tokens
+        h = self.tok_embeddings(input_ids) if self.tok_embeddings else input_ids
 
         for layer in self.layers.values():
             h = layer(h, self.freqs_cis, attention_mask, position_ids)
