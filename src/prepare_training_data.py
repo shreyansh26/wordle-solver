@@ -104,7 +104,8 @@ if __name__ == "__main__":
 
     print("Unique successful words:", df.shape[0])
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
+    # tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
 
     DO_RL = True
 
@@ -206,25 +207,25 @@ if __name__ == "__main__":
     random.shuffle(val_records_rl)
 
     print("Num rows:", len(records))
-    dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data_v2.jsonl')
+    dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data_v2_llama.jsonl')
     # dump_to_jsonl(records, '../data/sft/train/deepseek_r1_data.jsonl')
     # dump_to_jsonl(records, '../data/sft/train/openai_gpt_oss-120b_data.jsonl')
 
     print("Num rows train (sft):", len(train_records_sft))
-    dump_to_jsonl(train_records_sft, '../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train.jsonl')
+    dump_to_jsonl(train_records_sft, '../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl')
     # dump_to_jsonl(train_records_sft, '../data/sft/train/deepseek_r1_data_train.jsonl')
     # dump_to_jsonl(train_records_sft, '../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl')
 
     print("Num rows val (sft):", len(val_records_sft))
-    dump_to_jsonl(val_records_sft, '../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val.jsonl')
+    dump_to_jsonl(val_records_sft, '../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl')
     # dump_to_jsonl(val_records_sft, '../data/sft/train/deepseek_r1_data_val.jsonl')
     # dump_to_jsonl(val_records_sft, '../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl')
 
     if DO_RL:
         print("Num rows train (rl):", len(train_records_rl))
-        dump_to_jsonl(train_records_rl, '../data/sft/train/moonshot_kimi_k2_data_train_v2_rl_train.jsonl')
+        dump_to_jsonl(train_records_rl, '../data/sft/train/moonshot_kimi_k2_data_train_v2_rl_train_llama.jsonl')
         # dump_to_jsonl(train_records_rl, '../data/sft/train/openai_gpt_oss-120b_data_rl_train.jsonl')
 
         print("Num rows val (rl):", len(val_records_rl))
-        dump_to_jsonl(val_records_rl, '../data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val.jsonl')
+        dump_to_jsonl(val_records_rl, '../data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_llama.jsonl')
         # dump_to_jsonl(val_records_rl, '../data/sft/train/openai_gpt_oss-120b_data_rl_val.jsonl')
