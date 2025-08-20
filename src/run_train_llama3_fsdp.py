@@ -14,18 +14,15 @@ from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateD
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
+from utils.state_dict_utils import to_hf
 from dotenv import load_dotenv
-import functools
 import torch.distributed as dist
 import wandb
-import uuid
 import torch
 import torch.nn as nn
 import transformers
 import os
 import math
-import numpy as np
-import argparse
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional
@@ -119,7 +116,7 @@ def setup_model(model_name, max_length):
     )
     tokenizer.pad_token_id = tokenizer.eos_token_id
     
-    return model, tokenizer
+    return model, tokenizer, config, model_args
 
 def compile_model(model, backend="inductor", fullgraph=False):
     for layer_id, transformer_block in model.layers.named_children():
@@ -167,25 +164,22 @@ def evaluation(
     wandb,
     local_rank,
     loss_fn,
+    device,
 ):
     if local_rank == 0:
         print("RUNNING EVAL")
 
     model.eval()
-    losses = 0
+    losses = torch.tensor(0.0, device=device)
     for step, batch in enumerate(eval_dataloader):
-        inputs = {
-                "input_ids": batch["input_ids"].to(model.device),
-                "labels": batch["labels"].to(model.device),
-            }
-        if "attention_mask" in batch:
-            inputs["attention_mask"] = batch["attention_mask"].to(model.device)
-        if "position_ids" in batch:
-            inputs["position_ids"] = batch["position_ids"].to(model.device)
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["labels"].to(device)
+        attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
+        position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
         with torch.no_grad():
-            logits = model(**inputs)
+            logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
 
-        loss = loss_fn(logits, batch["labels"])
+        loss = loss_fn(logits, labels)
         losses += loss.float()
 
     losses = losses / (step + 1)
@@ -352,54 +346,33 @@ def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
         )
 
 
-def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, use_dcp_api):
-    if use_dcp_api:
-        cpu_state_dict = get_model_state_dict(
-                model=model,
-                options=StateDictOptions(
-                    full_state_dict=True,
-                    cpu_offload=True,
-                ),
-            )
-        if local_rank == 0:
-            print(f"SAVING MODEL")
-            cfg = model.config
-            cfg.architectures = ["LlamaForCausalLM"]
-            base = LlamaForCausalLM(cfg)
-            base.load_state_dict(cpu_state_dict, strict=True)
-            outpath += f"/epoch_{current_epoch}/step_{current_step}"
-            base.save_pretrained(outpath)
-            tokenizer.save_pretrained(outpath)
-    else:
-        sharded_sd = model.state_dict()
-        cpu_state_dict = {}
-        for param_name, sharded_param in sharded_sd.items():
-            full_param = sharded_param.full_tensor()
-            if local_rank == 0:
-                cpu_state_dict[param_name] = full_param.cpu()
-            else:
-                del full_param
-
-        if local_rank == 0:
-            print(f"SAVING MODEL")
-            outpath += f"/epoch_{current_epoch}/step_{current_step}"
-            model.save_pretrained(outpath, state_dict=cpu_state_dict)
-            tokenizer.save_pretrained(outpath)
+def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, hf_config, model_args):
+    cpu_state_dict = get_model_state_dict(
+            model=model,
+            options=StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+            ),
+        )
+    if local_rank == 0:
+        print(f"SAVING MODEL")
+        base = LlamaForCausalLM(hf_config)
+        hf_state_dict = to_hf(cpu_state_dict, model_args)
+        base.load_state_dict(hf_state_dict, strict=True)
+        outpath += f"/epoch_{current_epoch}/step_{current_step}"
+        base.save_pretrained(outpath)
+        tokenizer.save_pretrained(outpath)
     
     dist.barrier()  
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dcp-api", action="store_true", default=False)
-
-    args = parser.parse_args()
-
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
+    device = torch.device(f"cuda:{local_rank}")
 
     model_name = "meta-llama/Llama-3.2-3B"
     scheduler_type = "cosine"
@@ -408,7 +381,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft"
+    notes = "llama32_3b_fsdp_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 12288  # adjust as needed
@@ -424,15 +397,14 @@ if __name__ == "__main__":
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
-    packing = "ffd" # None, "ffd"
+    packing = None # None, "ffd"
     compile = True
 
     if local_rank == 0:
-        print("Using DCP API: ", args.dcp_api)
         print(f"OUTPUT DIR: {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
 
-    model, tokenizer = setup_model(model_name, max_length)
+    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length)
     num_params = sum([p.numel() for p in model.parameters()])
 
     if compile:
@@ -538,7 +510,7 @@ if __name__ == "__main__":
         )
         current_step = 0
         while True:
-            acc_loss = torch.tensor(0.).to(model.device)
+            acc_loss = torch.tensor(0.0, device=device)
             actual_accumulation_steps = 0
             for acc_step in range(gradient_accumulation_steps):
                 model.require_backward_grad_sync = (acc_step == gradient_accumulation_steps - 1) or \
@@ -549,17 +521,13 @@ if __name__ == "__main__":
                     train_iterator = iter(train_loader)
                     batch = next(train_iterator)
 
-                inputs = {
-                        "input_ids": batch["input_ids"].to(model.device),
-                        "labels": batch["labels"].to(model.device),
-                    }
-                if "attention_mask" in batch:
-                    inputs["attention_mask"] = batch["attention_mask"].to(model.device)
-                if "position_ids" in batch:
-                    inputs["position_ids"] = batch["position_ids"].to(model.device)
+                input_ids = batch["input_ids"].to(device)
+                labels = batch["labels"].to(device)
+                attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
+                position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
                 # forward
-                logits = model(**inputs)
-                loss = loss_fn(logits, batch["labels"])
+                logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                loss = loss_fn(logits, labels) 
                 acc_loss += loss.item()
                 loss /= gradient_accumulation_steps
 
@@ -606,6 +574,7 @@ if __name__ == "__main__":
                     wandb,
                     local_rank,
                     loss_fn,
+                    device,
                 )
 
                 dist.barrier()  
@@ -617,7 +586,8 @@ if __name__ == "__main__":
                     output_dir,
                     current_epoch,
                     current_step,
-                    args.dcp_api,
+                    hf_config,
+                    model_args,
                 )
 
                 dist.barrier()
@@ -626,4 +596,4 @@ if __name__ == "__main__":
                 break
 
     # save final model
-    save_model(local_rank, model, tokenizer, output_dir, epochs, "final", args.dcp_api)
+    save_model(local_rank, model, tokenizer, output_dir, epochs, "final", hf_config, model_args)
