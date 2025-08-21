@@ -1,4 +1,3 @@
-import random
 from api_key import hf_token
 from utils.training_utils import (
     SupervisedDataset,
@@ -27,6 +26,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional
 import json
+from contextlib import contextmanager, ExitStack
 try:
     # Python 3.9+
     from zoneinfo import ZoneInfo
@@ -158,6 +158,35 @@ def apply_activation_checkpointing(model, mode="full"):
 def compile_loss(loss_function, backend="inductor"):
     return torch.compile(loss_function, backend=backend)
 
+
+def get_train_context(enable_compiled_autograd: bool = False):
+    """
+    Returns a factory that produces a context manager for training steps, optionally
+    nesting an external context (e.g., CP/TP).
+      train_context = get_train_context(...)
+      with train_context(optional_ctx):
+          ...
+
+    enable_compiled_autograd is accepted for API parity; it's unused here but can be
+    hooked up later when integrating compiled autograd.
+    """
+
+    def train_context(optional_ctx=None):
+        @contextmanager
+        def _ctx():
+            with ExitStack() as stack:
+                # Enable compiled autograd if requested
+                if enable_compiled_autograd:
+                    stack.enter_context(
+                        torch._dynamo.utils.maybe_enable_compiled_autograd(True)
+                    )
+                if optional_ctx is not None:
+                    stack.enter_context(optional_ctx)
+                yield
+        return _ctx()
+
+    return train_context
+
 def evaluation(
     model,
     eval_dataloader,
@@ -165,6 +194,7 @@ def evaluation(
     local_rank,
     loss_fn,
     device,
+    train_context,
 ):
     if local_rank == 0:
         print("RUNNING EVAL")
@@ -177,7 +207,9 @@ def evaluation(
         attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
         position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
         with torch.no_grad():
-            logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+            # Optional CP/TP context wrapper for future integration
+            with train_context(None):
+                logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
 
         loss = loss_fn(logits, labels)
         losses += loss.float()
@@ -373,6 +405,8 @@ if __name__ == "__main__":
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
     device = torch.device(f"cuda:{local_rank}")
+    # Training context factory
+    train_context = get_train_context(enable_compiled_autograd=True)
 
     model_name = "meta-llama/Llama-3.2-3B-Instruct"
     scheduler_type = "cosine"
@@ -525,13 +559,15 @@ if __name__ == "__main__":
                 labels = batch["labels"].to(device)
                 attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
                 position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
-                # forward
-                logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                # forward under train_context (placeholder for CP/TP)
+                optional_context_parallel_ctx = None
+                with train_context(optional_context_parallel_ctx):
+                    logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
                 loss = loss_fn(logits, labels) 
                 acc_loss += loss.item()
                 loss /= gradient_accumulation_steps
 
-                # backward
+                # backward inside the same context
                 loss.backward()
                 
                 current_step += 1
@@ -575,6 +611,7 @@ if __name__ == "__main__":
                     local_rank,
                     loss_fn,
                     device,
+                    train_context,
                 )
 
                 dist.barrier()  
