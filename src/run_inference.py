@@ -12,7 +12,8 @@ DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
 # DATASET_DIR = "../data/sft/openai_gpt-oss-120b"
 # MODEL_NAME = "Qwen/Qwen3-4B"
 # MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-02T18:35:41_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2/epoch_5/step_final"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686"
+# MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/llama32/exp_2025-08-21T16:07:26_llama32_3b_fsdp_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft/epoch_5/merged_hf"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
@@ -64,12 +65,14 @@ async def process_word_chunk(sample_word_list, model_name, tokenizer, verbose=Fa
     return successful_word_results
 
 async def main():
-    sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
+    # sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, min_p=0)
+    sampling_params = SamplingParams(temperature=0.2, top_p=1, top_k=-1, min_p=0)
     client = AsyncOpenAI(
                 api_key="EMPTY",
-                base_url="http://localhost:9203/v1",
+                base_url="http://localhost:9202/v1",
             )
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
 
     model_data_dir = os.path.join("..", "data", "sft", MODEL_NAME.replace("/", "_"))
     os.makedirs(model_data_dir, exist_ok=True)

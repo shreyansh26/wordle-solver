@@ -1,1 +1,2 @@
-vllm serve "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686" --reasoning-parser deepseek_r1 --port 9203 --gpu-memory-utilization 0.9 --disable-log-requests
+# vllm serve "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686" --reasoning-parser deepseek_r1 --port 9203 --gpu-memory-utilization 0.9 --disable-log-requests
+vllm serve "/mnt/ssd2/shreyansh/models/llama32/exp_2025-08-21T16:07:26_llama32_3b_fsdp_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft/epoch_5/merged_hf" --port 9202 --gpu-memory-utilization 0.9 --disable-log-requests
