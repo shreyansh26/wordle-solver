@@ -10,6 +10,7 @@ from tqdm import tqdm
 from datetime import datetime
 from torch.distributed.fsdp import fully_shard, FSDPModule, MixedPrecisionPolicy
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torch.distributed import checkpoint as dcp
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
@@ -379,23 +380,55 @@ def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
 
 
 def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, hf_config, model_args):
+    """
+    Save checkpoints efficiently with DCP during training, and export HF once at the end.
+
+    - For per-epoch saves: use DCP distributed save (no all-gather, non-blocking for rank0).
+    - For the final save: aggregate full state on CPU and export HF as before.
+    """
+    # Final export path uses HF format; intermediate saves use DCP
+    is_final_export = isinstance(current_step, str) and current_step == "final"
+
+    if not is_final_export:
+        # DCP distributed save (FSDP2-friendly). Avoid aggregating full state.
+        # Build checkpoint directory
+        ckpt_dir = f"{outpath}/epoch_{current_epoch}/step_{current_step}"
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        # Each rank provides its shard-aware state dict
+        state = get_model_state_dict(model)
+        # Exclude non-persistent buffers if present
+        state.pop("freqs_cis", None)
+
+        # Save with DCP; all ranks participate
+        dcp.save(state, checkpoint_id=ckpt_dir)
+
+        # Save tokenizer once
+        if local_rank == 0:
+            tokenizer.save_pretrained(ckpt_dir)
+
+        dist.barrier()
+        return
+
+    # Final HF export (training is done, aggregation cost is acceptable)
     cpu_state_dict = get_model_state_dict(
-            model=model,
-            options=StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
-            ),
-        )
+        model=model,
+        options=StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+        ),
+    )
     if local_rank == 0:
-        print(f"SAVING MODEL")
+        print(f"SAVING FINAL HF MODEL")
         base = LlamaForCausalLM(hf_config)
         hf_state_dict = to_hf(cpu_state_dict, model_args)
         base.load_state_dict(hf_state_dict, strict=True)
-        outpath += f"/epoch_{current_epoch}/step_{current_step}"
-        base.save_pretrained(outpath)
-        tokenizer.save_pretrained(outpath)
-    
-    dist.barrier()  
+        final_dir = f"{outpath}/epoch_{current_epoch}/step_{current_step}"
+        os.makedirs(final_dir, exist_ok=True)
+        base.save_pretrained(final_dir)
+        tokenizer.save_pretrained(final_dir)
+
+    dist.barrier()
 
 if __name__ == "__main__":
     local_rank = int(os.environ["LOCAL_RANK"])
