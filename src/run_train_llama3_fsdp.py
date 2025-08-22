@@ -11,6 +11,7 @@ from datetime import datetime
 from torch.distributed.fsdp import fully_shard, FSDPModule, MixedPrecisionPolicy
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 from torch.distributed import checkpoint as dcp
+from torch.distributed.checkpoint import FileSystemWriter as StorageWriter
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from typing import Optional
 import json
 from contextlib import contextmanager, ExitStack
+import argparse
 try:
     # Python 3.9+
     from zoneinfo import ZoneInfo
@@ -379,7 +381,7 @@ def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
         )
 
 
-def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, hf_config, model_args):
+def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_step, hf_config, model_args, *, use_async_dcp: bool = False, storage_writer: Optional[StorageWriter] = None, checkpoint_state: Optional[dict] = None):
     """
     Save checkpoints efficiently with DCP during training, and export HF once at the end.
 
@@ -391,7 +393,7 @@ def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_ste
 
     if not is_final_export:
         # DCP distributed save (FSDP2-friendly). Avoid aggregating full state.
-        # Build checkpoint directory
+        # Build checkpoint directory and id
         ckpt_dir = f"{outpath}/epoch_{current_epoch}/step_{current_step}"
         os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -400,17 +402,41 @@ def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_ste
         # Exclude non-persistent buffers if present
         state.pop("freqs_cis", None)
 
-        # Save with DCP; all ranks participate
-        dcp.save(state, checkpoint_id=ckpt_dir)
+        if use_async_dcp:
+            # Ensure we do not queue multiple concurrent saves
+            if checkpoint_state is not None and checkpoint_state.get("future") is not None:
+                checkpoint_state["future"].result()
+                checkpoint_state["future"] = None
 
-        # Save tokenizer once
-        if local_rank == 0:
-            tokenizer.save_pretrained(ckpt_dir)
+            future = dcp.async_save(
+                state,
+                checkpoint_id=ckpt_dir,
+                storage_writer=storage_writer,
+            )
+            if checkpoint_state is not None:
+                checkpoint_state["future"] = future
 
-        dist.barrier()
-        return
+            # Save tokenizer once (small and fast); no barrier for async path
+            if local_rank == 0:
+                tokenizer.save_pretrained(ckpt_dir)
+            return
+        else:
+            # Save with DCP; all ranks participate
+            dcp.save(state, checkpoint_id=ckpt_dir)
+
+            # Save tokenizer once
+            if local_rank == 0:
+                tokenizer.save_pretrained(ckpt_dir)
+
+            dist.barrier()
+            return
 
     # Final HF export (training is done, aggregation cost is acceptable)
+    # Wait for any in-flight async save before final export
+    if use_async_dcp and checkpoint_state is not None and checkpoint_state.get("future") is not None:
+        checkpoint_state["future"].result()
+        checkpoint_state["future"] = None
+
     cpu_state_dict = get_model_state_dict(
         model=model,
         options=StateDictOptions(
@@ -431,12 +457,25 @@ def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_ste
     dist.barrier()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-dcp", dest="use_async_dcp", action="store_true", help="Enable async DCP checkpointing")
+    parser.add_argument("--async-dcp-pinned", dest="use_pinned_writer", action="store_true", help="Use pinned-memory writer with async DCP")
+    args, _ = parser.parse_known_args()
+
+    # Checkpointing options (also configurable via CLI flags)
+    use_async_dcp = bool(args.use_async_dcp)
+    use_pinned_writer = bool(args.use_pinned_writer)
+    if use_pinned_writer and not use_async_dcp:
+        # Pinned writer requires async mode; promote to async
+        use_async_dcp = True
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
+    # Enable CPU backend if async DCP is requested (required by async_save)
+    _backend = "cpu:gloo,cuda:nccl" if use_async_dcp else "nccl"
+    dist.init_process_group(_backend, rank=local_rank, world_size=world_size)
     device = torch.device(f"cuda:{local_rank}")
     # Training context factory
     train_context = get_train_context(enable_compiled_autograd=True)
@@ -484,6 +523,15 @@ if __name__ == "__main__":
     assert isinstance(model, FSDPModule)
 
     optimizer = get_optimizer(model, lr, weight_decay)
+
+    # Prepare async DCP writer and state if requested
+    checkpoint_state = {"future": None}
+    storage_writer = None
+    if use_async_dcp:
+        storage_writer = StorageWriter(
+            cache_staged_state_dict=use_pinned_writer,
+            path=output_dir,
+        )
     
     train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl"]
     val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl"]
@@ -647,7 +695,8 @@ if __name__ == "__main__":
                     train_context,
                 )
 
-                dist.barrier()  
+                if not use_async_dcp:
+                    dist.barrier()
 
                 save_model(
                     local_rank,
@@ -658,12 +707,28 @@ if __name__ == "__main__":
                     current_step,
                     hf_config,
                     model_args,
+                    use_async_dcp=use_async_dcp,
+                    storage_writer=storage_writer,
+                    checkpoint_state=checkpoint_state,
                 )
 
-                dist.barrier()
+                if not use_async_dcp:
+                    dist.barrier()
 
                 model.train()
                 break
 
     # save final model
-    save_model(local_rank, model, tokenizer, output_dir, epochs, "final", hf_config, model_args)
+    save_model(
+        local_rank,
+        model,
+        tokenizer,
+        output_dir,
+        epochs,
+        "final",
+        hf_config,
+        model_args,
+        use_async_dcp=use_async_dcp,
+        storage_writer=storage_writer,
+        checkpoint_state=checkpoint_state,
+    )
