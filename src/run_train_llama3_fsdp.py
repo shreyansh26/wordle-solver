@@ -78,9 +78,9 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
         pred.reshape(-1, pred.size(-1)).float(), labels.reshape(-1)
     )
 
-def load_model(model_path, model_args):
+def load_model(model_path, model_args, use_flash_attn: bool = False):
     with torch.device("meta"):
-        model = Transformer(model_args)
+        model = Transformer(model_args, use_flash_attn=use_flash_attn)
     
     model = model.to_empty(device="cpu")
     state_dict = torch.load(f"{model_path}/consolidated.00.pth", weights_only=True, mmap=True)
@@ -91,7 +91,7 @@ def load_model(model_path, model_args):
         model.freqs_cis = model._precompute_freqs_cis()
     return model
 
-def setup_model(model_name, max_length):
+def setup_model(model_name, max_length, use_flash_attn: bool = False):
     config = transformers.AutoConfig.from_pretrained(
         model_name,
         use_auth_token=hf_token,
@@ -107,7 +107,7 @@ def setup_model(model_name, max_length):
     params['max_seq_len'] = 131072
     model_args = ModelArgs(**params)
 
-    model = load_model(model_path, model_args)
+    model = load_model(model_path, model_args, use_flash_attn=use_flash_attn)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
@@ -487,7 +487,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft"
+    notes = "llama32_3b_fsdp_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 12288  # adjust as needed
@@ -505,12 +505,14 @@ if __name__ == "__main__":
     train_on_inputs = False  # whether to train on instruction tokens
     packing = None # None, "ffd"
     compile = True
+    use_flash_attn = True  # whether to use Flash Attention instead of SDPA
 
     if local_rank == 0:
         print(f"OUTPUT DIR: {output_dir}")
+        print(f"USING FLASH ATTENTION: {use_flash_attn}")
         os.makedirs(output_dir, exist_ok=True)
 
-    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length)
+    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn)
     num_params = sum([p.numel() for p in model.parameters()])
 
     if compile:
@@ -541,7 +543,7 @@ if __name__ == "__main__":
     train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
     val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
     if packing == "ffd":
-        assert model.config._attn_implementation == "flash_attention_2"
+        assert use_flash_attn is True
         collator = DataCollatorForLanguageModeling(
             pad_token_id=tokenizer.pad_token_id,
             completion_only_loss=True,
@@ -600,6 +602,7 @@ if __name__ == "__main__":
                 "batch_size": train_batch_size,
                 "total_batch_size": train_batch_size * world_size,
                 "scheduler_type": scheduler_type,
+                "use_flash_attn": use_flash_attn,
             },
         )
 
