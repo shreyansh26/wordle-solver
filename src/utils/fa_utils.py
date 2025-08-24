@@ -19,7 +19,7 @@ from typing import Optional, TypedDict
 import torch
 import torch.nn.functional as F
 
-from hf_utils import (
+from utils.hf_utils import (
     is_flash_attn_2_available,
     is_flash_attn_3_available,
     is_flash_attn_greater_or_equal_2_10,
