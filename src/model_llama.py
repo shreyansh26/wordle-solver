@@ -18,9 +18,14 @@ try:
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
 
-from fa_utils import _flash_attention_forward
-HF_FA_AVAILABLE = True
+try:
+    from utils.fa_utils import _flash_attention_forward
+    HF_FA_AVAILABLE = True
+except:
+    HF_FA_AVAILABLE = False
 
+print(f"FLASH_ATTN_AVAILABLE: {FLASH_ATTN_AVAILABLE}")
+print(f"HF_FA_AVAILABLE: {HF_FA_AVAILABLE}")
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
     """
