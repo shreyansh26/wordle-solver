@@ -9,6 +9,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from utils.attn_mask_utils import _prepare_4d_causal_attention_mask
 
 try:
@@ -625,6 +626,124 @@ class FlashAttention(nn.Module):
         output = output.view(bs, seqlen, -1)
         return self.wo(output)
 
+class FlashAttentionSDPA(nn.Module):
+    """
+    Multi-head attention module.
+
+    Args:
+        model_args (TransformerModelArgs): Model configuration arguments.
+
+    Attributes:
+        n_kv_heads (int): Number of key and value heads.
+        n_heads (int): Number of query heads.
+        n_rep (int): Number of repetitions for local heads.
+        head_dim (int): Dimension size of each attention head.
+        wq (Linear): Linear transformation for queries.
+        wk (Linear): Linear transformation for keys.
+        wv (Linear): Linear transformation for values.
+        wo (Linear): Linear transformation for output.
+
+    """
+
+    def __init__(self, model_args):
+        super().__init__()
+        self.n_heads = model_args.n_heads
+        self.n_kv_heads = (
+            model_args.n_heads
+            if model_args.n_kv_heads is None
+            else model_args.n_kv_heads
+        )
+        self.n_rep = self.n_heads // self.n_kv_heads
+        self.head_dim = model_args.dim // model_args.n_heads
+
+        self.wq = nn.Linear(
+            model_args.dim, model_args.n_heads * self.head_dim, bias=False
+        )
+        self.wk = nn.Linear(model_args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(model_args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wo = nn.Linear(
+            model_args.n_heads * self.head_dim, model_args.dim, bias=False
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+    ):
+        """
+        Forward pass of the attention module.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+            freqs_cis (torch.Tensor): Precomputed frequency tensor.
+            attention_mask (torch.Tensor): The attention mask.
+            position_ids (torch.LongTensor): The position ids.
+        Returns:
+            torch.Tensor: Output tensor after attention.
+
+        """
+
+        bs, seqlen, _ = x.shape
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+
+        # Use -1 instead of `n_heads` (or `n_kv_heads`) to infer the actual
+        # local heads from sizes of xq, xk, and xv as TP may have sharded them
+        # after the above linear ops.
+        xq = xq.view(bs, seqlen, -1, self.head_dim)
+        xk = xk.view(bs, seqlen, -1, self.head_dim)
+        xv = xv.view(bs, seqlen, -1, self.head_dim)
+
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        # keys = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+        # values = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+
+        # xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        # xk = keys.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        # xv = values.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+
+        xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        xk = xk.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        xv = xv.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+
+        if attention_mask is not None:
+            # Attention mask was made 4D because the `attn_weights` above is 4D.
+            # We probably can make this mask smarter if we want to pack sequences
+            # together, instead of using padding. This optimization can be used in
+            # inference. For training, if we want to pack sequences, data loader
+            # will pass in a mask containing such info.
+            attention_mask = _prepare_4d_causal_attention_mask(
+                attention_mask,  # None, or user provided mask in 2D
+                (bs, seqlen),
+                x,
+                0,  # past_key_values_length, 0 when training
+            ).to(x.dtype)
+            if attention_mask.size() != (bs, 1, seqlen, seqlen):
+                raise ValueError(
+                    f"Attention mask should be of size {(bs, 1, seqlen, seqlen)}, but is {attention_mask.size()}"
+                )
+
+        with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+            output = torch.nn.functional.scaled_dot_product_attention(
+                query=xq,
+                key=xk,
+                value=xv,
+                attn_mask=None,
+                dropout_p=0.0,
+                is_causal=True,
+                scale=xq.shape[-1] ** (-0.5),
+                enable_gqa=True,
+            )
+
+        output = output.transpose(
+            1, 2
+        ).contiguous()  # (bs, seqlen, n_local_heads, head_dim)
+        
+        output = output.view(bs, seqlen, -1)
+        return self.wo(output)
 
 class Attention(nn.Module):
     """
@@ -799,14 +918,16 @@ class TransformerBlock(nn.Module):
 
     """
 
-    def __init__(self, layer_id: int, model_args, use_flash_attn: bool = False):
+    def __init__(self, layer_id: int, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
         super().__init__()
         self.n_heads = model_args.n_heads
         self.dim = model_args.dim
         
         # Choose attention implementation
-        if use_flash_attn:
+        if use_flash_attn_api:
             self.attention = FlashAttention(model_args)
+        elif use_flash_attn_sdpa:
+            self.attention = FlashAttentionSDPA(model_args)
         else:
             self.attention = Attention(model_args)
             
@@ -862,12 +983,13 @@ class Transformer(nn.Module):
 
     """
 
-    def __init__(self, model_args, use_flash_attn: bool = False):
+    def __init__(self, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
         super().__init__()
         self.model_args = model_args
         self.vocab_size = model_args.vocab_size
         self.n_layers = model_args.n_layers
-        self.use_flash_attn = use_flash_attn
+        self.use_flash_attn_api = use_flash_attn_api
+        self.use_flash_attn_sdpa = use_flash_attn_sdpa
 
         self.tok_embeddings = nn.Embedding(model_args.vocab_size, model_args.dim)
 
@@ -882,7 +1004,7 @@ class Transformer(nn.Module):
 
         self.layers = torch.nn.ModuleDict()
         for layer_id in range(model_args.n_layers):
-            self.layers[str(layer_id)] = TransformerBlock(layer_id, model_args, use_flash_attn)
+            self.layers[str(layer_id)] = TransformerBlock(layer_id, model_args, use_flash_attn_api, use_flash_attn_sdpa)
         self.norm = nn.RMSNorm(model_args.dim, eps=model_args.norm_eps)
         self.output = nn.Linear(model_args.dim, model_args.vocab_size, bias=False)
 

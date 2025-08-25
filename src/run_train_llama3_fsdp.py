@@ -78,9 +78,9 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
         pred.reshape(-1, pred.size(-1)).float(), labels.reshape(-1)
     )
 
-def load_model(model_path, model_args, use_flash_attn: bool = False):
+def load_model(model_path, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
     with torch.device("meta"):
-        model = Transformer(model_args, use_flash_attn=use_flash_attn)
+        model = Transformer(model_args, use_flash_attn_api=use_flash_attn_api, use_flash_attn_sdpa=use_flash_attn_sdpa)
     
     model = model.to_empty(device="cpu")
     state_dict = torch.load(f"{model_path}/consolidated.00.pth", weights_only=True, mmap=True)
@@ -91,7 +91,7 @@ def load_model(model_path, model_args, use_flash_attn: bool = False):
         model.freqs_cis = model._precompute_freqs_cis()
     return model
 
-def setup_model(model_name, max_length, use_flash_attn: bool = False):
+def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
     config = transformers.AutoConfig.from_pretrained(
         model_name,
         use_auth_token=hf_token,
@@ -107,7 +107,7 @@ def setup_model(model_name, max_length, use_flash_attn: bool = False):
     params['max_seq_len'] = 131072
     model_args = ModelArgs(**params)
 
-    model = load_model(model_path, model_args, use_flash_attn=use_flash_attn)
+    model = load_model(model_path, model_args, use_flash_attn_api=use_flash_attn_api, use_flash_attn_sdpa=use_flash_attn_sdpa)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
@@ -505,14 +505,16 @@ if __name__ == "__main__":
     train_on_inputs = False  # whether to train on instruction tokens
     packing = None # None, "ffd"
     compile = True
-    use_flash_attn = True  # whether to use Flash Attention instead of SDPA
+    use_flash_attn_api = False  # whether to use Flash Attention instead of SDPA
+    use_flash_attn_sdpa = True  # whether to use Flash Attention backend from SDPA
 
     if local_rank == 0:
         print(f"OUTPUT DIR: {output_dir}")
-        print(f"USING FLASH ATTENTION: {use_flash_attn}")
+        print(f"USING FLASH ATTENTION (from API): {use_flash_attn_api}")
+        print(f"USING FLASH ATTENTION (from SDPA): {use_flash_attn_sdpa}")
         os.makedirs(output_dir, exist_ok=True)
 
-    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn)
+    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn_api, use_flash_attn_sdpa)
     num_params = sum([p.numel() for p in model.parameters()])
 
     if compile:
@@ -543,7 +545,7 @@ if __name__ == "__main__":
     train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
     val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
     if packing == "ffd":
-        assert use_flash_attn is True
+        assert use_flash_attn_api is True
         collator = DataCollatorForLanguageModeling(
             pad_token_id=tokenizer.pad_token_id,
             completion_only_loss=True,
@@ -602,7 +604,8 @@ if __name__ == "__main__":
                 "batch_size": train_batch_size,
                 "total_batch_size": train_batch_size * world_size,
                 "scheduler_type": scheduler_type,
-                "use_flash_attn": use_flash_attn,
+                "use_flash_attn_api": use_flash_attn_api,
+                "use_flash_attn_sdpa": use_flash_attn_sdpa,
             },
         )
 
