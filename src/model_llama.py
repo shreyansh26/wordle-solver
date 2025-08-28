@@ -817,12 +817,16 @@ class Attention(nn.Module):
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
         # repeat k/v heads if n_kv_heads < n_heads
-        keys = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
-        values = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+        # keys = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+        # values = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+
+        # xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        # xk = keys.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        # xv = values.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
 
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        xk = keys.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        xv = values.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        xk = xk.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
+        xv = xv.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
 
         if attention_mask is not None:
             # Attention mask was made 4D because the `attn_weights` above is 4D.
@@ -845,10 +849,11 @@ class Attention(nn.Module):
             query=xq,
             key=xk,
             value=xv,
-            attn_mask=attention_mask,
+            attn_mask=None,
             dropout_p=0.0,
-            is_causal=attention_mask is None,
+            is_causal=True,
             scale=xq.shape[-1] ** (-0.5),
+            enable_gqa=True,
         )
 
         output = output.transpose(
