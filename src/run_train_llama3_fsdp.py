@@ -550,7 +550,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_flash_attn_fsdp2_torch_compile_dcp_kimi_k2_v2_sft"
+    notes = "llama32_3b_fsdp_attn_fsdp2_cp_torch_compile_dcp_kimi_k2_v2_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 12288  # adjust as needed
@@ -569,7 +569,7 @@ if __name__ == "__main__":
     packing = None # None, "ffd"
     compile = True
     use_flash_attn_api = False  # whether to use Flash Attention instead of SDPA
-    use_flash_attn_sdpa = True  # whether to use Flash Attention backend from SDPA
+    use_flash_attn_sdpa = False  # whether to use Flash Attention backend from SDPA
 
     if local_rank == 0:
         print(f"OUTPUT DIR: {output_dir}")
@@ -605,8 +605,8 @@ if __name__ == "__main__":
     # train_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl"]
     # val_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl"]
 
-    train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
-    val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
+    train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing, limit=100)
+    val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing, limit=100)
     if packing == "ffd":
         assert use_flash_attn_api is True
         collator = DataCollatorForLanguageModeling(
@@ -617,7 +617,7 @@ if __name__ == "__main__":
             pad_to_multiple_of=None,
         )
     else:
-        collator = DataCollatorForSupervisedDataset(tokenizer)
+        collator = DataCollatorForSupervisedDataset(tokenizer, pad_to_multiple_of=8)
 
     train_sampler, train_loader = get_dataloader(
         max_length,

@@ -7,6 +7,7 @@ import datasets
 import logging
 import torch.distributed as dist
 import torch
+import torch.nn.functional as F
 import transformers
 import copy
 import math
@@ -156,6 +157,7 @@ class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
     tokenizer: transformers.PreTrainedTokenizer
+    pad_to_multiple_of: int | None = None
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels = tuple(
@@ -167,6 +169,15 @@ class DataCollatorForSupervisedDataset(object):
         labels = torch.nn.utils.rnn.pad_sequence(
             labels, batch_first=True, padding_value=IGNORE_INDEX
         )
+
+        # Optionally pad to a multiple (e.g., 8) for kernel alignment or parallelism constraints
+        if self.pad_to_multiple_of is not None and self.pad_to_multiple_of > 1:
+            seq_len = input_ids.size(1)
+            remainder = seq_len % self.pad_to_multiple_of
+            if remainder != 0:
+                pad_amount = self.pad_to_multiple_of - remainder
+                input_ids = F.pad(input_ids, (0, pad_amount), value=self.tokenizer.pad_token_id)
+                labels = F.pad(labels, (0, pad_amount), value=IGNORE_INDEX)
 
         return dict(
             input_ids=input_ids,
