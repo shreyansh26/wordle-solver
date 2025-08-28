@@ -13,6 +13,7 @@ from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateD
 from torch.distributed import checkpoint as dcp
 from torch.distributed.checkpoint import FileSystemWriter as StorageWriter
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
+from torch.distributed.device_mesh import DeviceMesh
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
 from utils.state_dict_utils import to_hf
@@ -126,7 +127,7 @@ def compile_model(model, backend="inductor", fullgraph=False):
         transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=fullgraph)
         model.layers.register_module(layer_id, transformer_block)
 
-def apply_fsdp(model):
+def apply_fsdp(model, dp_mesh: DeviceMesh | None = None):
     fsdp_kwargs = {
         "mp_policy": MixedPrecisionPolicy(
             param_dtype=torch.bfloat16,
@@ -134,6 +135,8 @@ def apply_fsdp(model):
         ),
         "reshard_after_forward": True
     }
+    if dp_mesh is not None:
+        fsdp_kwargs["mesh"] = dp_mesh
 
     for layer_id, transformer_block in model.layers.named_children():
         fully_shard(transformer_block, **fsdp_kwargs)
@@ -189,6 +192,38 @@ def get_train_context(enable_compiled_autograd: bool = False):
         return _ctx()
 
     return train_context
+
+
+def create_context_parallel_ctx(
+    cp_mesh: DeviceMesh,
+    cp_buffers: list,
+    cp_seq_dims: list[int],
+    cp_no_restore_buffers: set,
+    cp_rotate_method: str,
+):
+    """
+    Thin wrapper over torch.distributed.tensor.experimental.context_parallel
+    mirroring TorchTitan's utility. It also sets the rotate method to either
+    'allgather' or 'alltoall'.
+    """
+    try:
+        from torch.distributed.tensor.experimental import context_parallel
+        from torch.distributed.tensor.experimental._attention import set_rotate_method
+    except ImportError:
+        raise RuntimeError(
+            f"Your PyTorch version ({torch.__version__}) does not expose experimental Context Parallel API"
+        )
+
+    if cp_rotate_method not in ("allgather", "alltoall"):
+        raise ValueError("cp_rotate_method must be 'allgather' or 'alltoall'")
+
+    set_rotate_method(cp_rotate_method)
+    return context_parallel(
+        cp_mesh,
+        buffers=cp_buffers,
+        buffer_seq_dims=cp_seq_dims,
+        no_restore_buffers=cp_no_restore_buffers,
+    )
 
 def evaluation(
     model,
@@ -460,6 +495,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--async-dcp", dest="use_async_dcp", action="store_true", help="Enable async DCP checkpointing")
     parser.add_argument("--async-dcp-pinned", dest="use_pinned_writer", action="store_true", help="Use pinned-memory writer with async DCP")
+    parser.add_argument("--cp-degree", type=int, default=1, help="Context parallel degree (1 disables CP)")
+    parser.add_argument(
+        "--cp-rotate",
+        type=str,
+        default="allgather",
+        choices=["allgather", "alltoall"],
+        help="Context parallel rotate method: allgather or alltoall",
+    )
     args, _ = parser.parse_known_args()
 
     # Checkpointing options (also configurable via CLI flags)
@@ -477,6 +520,26 @@ if __name__ == "__main__":
     _backend = "cpu:gloo,cuda:nccl" if use_async_dcp else "nccl"
     dist.init_process_group(_backend, rank=local_rank, world_size=world_size)
     device = torch.device(f"cuda:{local_rank}")
+    # Build 2D device mesh for DP x CP if CP is enabled; else 1D mesh on DP only
+    cp_degree = int(args.cp_degree)
+    if cp_degree < 1:
+        raise ValueError("--cp-degree must be >= 1")
+    if cp_degree > 1 and (world_size % cp_degree != 0):
+        raise ValueError(f"WORLD_SIZE {world_size} must be divisible by cp-degree {cp_degree}")
+    dp_degree = world_size // cp_degree
+    if cp_degree > 1:
+        mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, cp_degree)
+        world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "cp"))
+        dp_mesh = world_mesh["dp"]
+        cp_mesh = world_mesh["cp"]
+        cp_enabled = True
+    else:
+        mesh_1d = torch.arange(world_size, device=torch.device("cpu"))
+        world_mesh = DeviceMesh("cuda", mesh_1d, mesh_dim_names=("dp",))
+        dp_mesh = world_mesh
+        cp_mesh = None
+        cp_enabled = False
+    cp_rotate_method = str(args.cp_rotate)
     # Training context factory
     train_context = get_train_context(enable_compiled_autograd=True)
 
@@ -522,7 +585,7 @@ if __name__ == "__main__":
         backend = "inductor"
         compile_model(model, backend=backend, fullgraph=False)
     
-    apply_fsdp(model)
+    apply_fsdp(model, dp_mesh=dp_mesh)
 
     assert isinstance(model, FSDPModule)
 
@@ -646,8 +709,25 @@ if __name__ == "__main__":
                 labels = batch["labels"].to(device)
                 attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
                 position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
-                # forward under train_context (placeholder for CP/TP)
+                # Optional CP context
                 optional_context_parallel_ctx = None
+                if cp_enabled:
+                    cp_buffers = [input_ids, labels, model.freqs_cis]
+                    cp_seq_dims = [1, 1, 0]
+                    if attention_mask is not None:
+                        cp_buffers.append(attention_mask)
+                        cp_seq_dims.append(1)
+                    if position_ids is not None:
+                        cp_buffers.append(position_ids)
+                        cp_seq_dims.append(1)
+                    optional_context_parallel_ctx = create_context_parallel_ctx(
+                        cp_mesh=cp_mesh,
+                        cp_buffers=cp_buffers,
+                        cp_seq_dims=cp_seq_dims,
+                        cp_no_restore_buffers={input_ids, labels},
+                        cp_rotate_method=cp_rotate_method,
+                    )
+                # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
                     logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
                 loss = loss_fn(logits, labels) 
@@ -691,15 +771,46 @@ if __name__ == "__main__":
                 )
 
             if current_step == total_steps_per_epoch:
-                validation_loss = evaluation(
-                    model,
-                    val_loader,
-                    wandb,
-                    local_rank,
-                    loss_fn,
-                    device,
-                    train_context,
-                )
+                # Run eval wrapped in CP if enabled (to maintain sequence sharding behavior)
+                validation_loss = None
+                for step, batch in enumerate(val_loader):
+                    input_ids = batch["input_ids"].to(device)
+                    labels = batch["labels"].to(device)
+                    attention_mask = batch["attention_mask"].to(device) if "attention_mask" in batch else None
+                    position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
+                    optional_context_parallel_ctx = None
+                    if cp_enabled:
+                        cp_buffers = [input_ids, labels, model.freqs_cis]
+                        cp_seq_dims = [1, 1, 0]
+                        if attention_mask is not None:
+                            cp_buffers.append(attention_mask)
+                            cp_seq_dims.append(1)
+                        if position_ids is not None:
+                            cp_buffers.append(position_ids)
+                            cp_seq_dims.append(1)
+                        optional_context_parallel_ctx = create_context_parallel_ctx(
+                            cp_mesh=cp_mesh,
+                            cp_buffers=cp_buffers,
+                            cp_seq_dims=cp_seq_dims,
+                            cp_no_restore_buffers={input_ids, labels},
+                            cp_rotate_method=cp_rotate_method,
+                        )
+                    model.eval()
+                    with torch.no_grad():
+                        with train_context(optional_context_parallel_ctx):
+                            logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                    loss_val = loss_fn(logits, labels).float()
+                    # accumulate
+                    if validation_loss is None:
+                        validation_loss = torch.tensor(0.0, device=device)
+                    validation_loss += loss_val
+                if validation_loss is None:
+                    validation_loss = torch.tensor(0.0, device=device)
+                validation_loss = validation_loss / (step + 1)
+                val_loss = get_all_reduce_mean(validation_loss.clone()).item()
+                if local_rank == 0:
+                    print(f"Validation Loss {val_loss:.4f}")
+                    wandb.log({"val_loss": val_loss})
 
                 if not use_async_dcp:
                     dist.barrier()
