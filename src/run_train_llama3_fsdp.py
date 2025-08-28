@@ -567,7 +567,7 @@ if __name__ == "__main__":
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
     packing = None # None, "ffd"
-    compile = True
+    compile = False
     use_flash_attn_api = False  # whether to use Flash Attention instead of SDPA
     use_flash_attn_sdpa = False  # whether to use Flash Attention backend from SDPA
 
@@ -676,7 +676,8 @@ if __name__ == "__main__":
         apply_activation_checkpointing(model, "full")
 
     loss_fn = cross_entropy_loss
-    loss_fn = compile_loss(loss_fn, backend=backend)
+    if compile:
+        loss_fn = compile_loss(loss_fn, backend="inductor")
 
     model.train()
     dist.barrier()
