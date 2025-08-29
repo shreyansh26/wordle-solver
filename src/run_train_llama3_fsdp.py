@@ -271,8 +271,8 @@ def evaluation(
 def get_dataloader(
     max_length,
     dataset,
-    world_size,
-    local_rank,
+    dp_degree,
+    dp_rank,
     shuffle,
     seed,
     collator,
@@ -280,8 +280,8 @@ def get_dataloader(
 ):
     sampler = DistributedSampler(
         dataset,
-        num_replicas=world_size,
-        rank=local_rank,
+        num_replicas=dp_degree,
+        rank=dp_rank,
         shuffle=shuffle,
         seed=seed,
     )
@@ -366,9 +366,13 @@ def log_stats(pbar, wandb, epoch, loss_tensor, grad_norm, scheduler, step_size):
     pbar.update(step_size)
 
 
-def get_all_reduce_mean(tensor):
-    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
-    tensor = tensor / torch.distributed.get_world_size()
+def get_all_reduce_mean(tensor, group=None):
+    if group is not None:
+        torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM, group=group)
+        tensor = tensor / group.size()
+    else:
+        torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+        tensor = tensor / torch.distributed.get_world_size()
     return tensor
 
 
@@ -526,7 +530,9 @@ if __name__ == "__main__":
         raise ValueError("--cp-degree must be >= 1")
     if cp_degree > 1 and (world_size % cp_degree != 0):
         raise ValueError(f"WORLD_SIZE {world_size} must be divisible by cp-degree {cp_degree}")
+    
     dp_degree = world_size // cp_degree
+
     if cp_degree > 1:
         mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, cp_degree)
         world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "cp"))
@@ -539,6 +545,8 @@ if __name__ == "__main__":
         dp_mesh = world_mesh
         cp_mesh = None
         cp_enabled = False
+
+    dp_rank = dp_mesh.get_local_rank()
     cp_rotate_method = str(args.cp_rotate)
     # Training context factory
     train_context = get_train_context(enable_compiled_autograd=True)
@@ -557,8 +565,8 @@ if __name__ == "__main__":
     gradient_checkpointing = True
     clip_gradients = True
     shuffle = True  # multipack sampler already does random sampling
-    train_batch_size = 2 # adjust as needed
-    validation_batch_size = 2  # adjust as needed
+    train_batch_size = 1 # adjust as needed
+    validation_batch_size = 1  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
@@ -576,6 +584,11 @@ if __name__ == "__main__":
         print(f"USING FLASH ATTENTION (from API): {use_flash_attn_api}")
         print(f"USING FLASH ATTENTION (from SDPA): {use_flash_attn_sdpa}")
         os.makedirs(output_dir, exist_ok=True)
+
+    if cp_enabled:
+        assert (
+            max_length % (2 * cp_degree) == 0
+        ), f"max_length {max_length} must be divisible by 2*cp_degree={2*cp_degree} when CP is enabled"
 
     model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn_api, use_flash_attn_sdpa)
     num_params = sum([p.numel() for p in model.parameters()])
@@ -605,8 +618,8 @@ if __name__ == "__main__":
     # train_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl"]
     # val_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl"]
 
-    train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing, limit=100)
-    val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing, limit=100)
+    train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
+    val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
     if packing == "ffd":
         assert use_flash_attn_api is True
         collator = DataCollatorForLanguageModeling(
@@ -622,8 +635,8 @@ if __name__ == "__main__":
     train_sampler, train_loader = get_dataloader(
         max_length,
         train_dataset,
-        world_size,
-        local_rank,
+        dp_degree,
+        dp_rank,
         shuffle,
         seed,
         collator,
@@ -632,8 +645,8 @@ if __name__ == "__main__":
     val_sampler, val_loader = get_dataloader(
         max_length,
         val_dataset,
-        world_size,
-        local_rank,
+        dp_degree,
+        dp_rank,
         shuffle,
         seed,
         collator,
@@ -672,8 +685,10 @@ if __name__ == "__main__":
             },
         )
 
-    if gradient_checkpointing:
+    if gradient_checkpointing and not cp_enabled:
         apply_activation_checkpointing(model, "full")
+    elif gradient_checkpointing and cp_enabled and local_rank == 0:
+        print("Skipping activation checkpointing under CP to avoid inplace autograd issues with checkpointed graphs")
 
     loss_fn = cross_entropy_loss
     if compile:
@@ -713,7 +728,9 @@ if __name__ == "__main__":
                 # Optional CP context
                 optional_context_parallel_ctx = None
                 if cp_enabled:
-                    cp_buffers = [input_ids, labels, model.freqs_cis]
+                    # Clone freqs_cis to avoid in-place modifications during CP
+                    freqs_cis_clone = model.freqs_cis.clone()
+                    cp_buffers = [input_ids, labels, freqs_cis_clone]
                     cp_seq_dims = [1, 1, 0]
                     if attention_mask is not None:
                         cp_buffers.append(attention_mask)
@@ -738,6 +755,11 @@ if __name__ == "__main__":
                 # backward inside the same context
                 loss.backward()
                 
+                # Clean up to reduce memory fragmentation
+                del loss, logits
+                if cp_enabled:
+                    del freqs_cis_clone
+                
                 current_step += 1
                 actual_accumulation_steps += 1
 
@@ -757,8 +779,9 @@ if __name__ == "__main__":
             # zero gradients after weight update
             optimizer.zero_grad(set_to_none=True)
 
-            # avg loss over all processes
-            acc_loss = get_all_reduce_mean(acc_loss).item()
+            # avg loss over DP processes only
+            dp_group = dp_mesh.get_group() if cp_enabled else None
+            acc_loss = get_all_reduce_mean(acc_loss, group=dp_group).item()
 
             if local_rank == 0:
                 log_stats(
@@ -781,7 +804,9 @@ if __name__ == "__main__":
                     position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
                     optional_context_parallel_ctx = None
                     if cp_enabled:
-                        cp_buffers = [input_ids, labels, model.freqs_cis]
+                        # Clone freqs_cis to avoid in-place modifications during CP
+                        freqs_cis_clone = model.freqs_cis.clone()
+                        cp_buffers = [input_ids, labels, freqs_cis_clone]
                         cp_seq_dims = [1, 1, 0]
                         if attention_mask is not None:
                             cp_buffers.append(attention_mask)
@@ -808,7 +833,8 @@ if __name__ == "__main__":
                 if validation_loss is None:
                     validation_loss = torch.tensor(0.0, device=device)
                 validation_loss = validation_loss / (step + 1)
-                val_loss = get_all_reduce_mean(validation_loss.clone()).item()
+                dp_group = dp_mesh.get_group() if cp_enabled else None
+                val_loss = get_all_reduce_mean(validation_loss.clone(), group=dp_group).item()
                 if local_rank == 0:
                     print(f"Validation Loss {val_loss:.4f}")
                     wandb.log({"val_loss": val_loss})
