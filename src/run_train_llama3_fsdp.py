@@ -558,15 +558,15 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_flash_attn_fsdp2_cp_torch_compile_dcp_kimi_k2_v2_sft"
+    notes = "llama32_3b_fsdp_flash_attn_fsdp2_cp_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
-    max_length = 12288  # adjust as needed
+    max_length = 16384 # 12288  # adjust as needed
     gradient_checkpointing = True
     clip_gradients = True
     shuffle = True  # multipack sampler already does random sampling
-    train_batch_size = 2 # adjust as needed
-    validation_batch_size = 2  # adjust as needed
+    train_batch_size = 1 # adjust as needed
+    validation_batch_size = 1  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
@@ -613,10 +613,10 @@ if __name__ == "__main__":
             path=output_dir,
         )
     
-    train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl"]
-    val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl"]
-    # train_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl"]
-    # val_ds = ["../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl"]
+    # train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl"]
+    # val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl"]
+    train_ds = ["../data/sft/train/deepseek_r1_data_train.jsonl"]
+    val_ds = ["../data/sft/train/deepseek_r1_data_val.jsonl"]
 
     train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
     val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
