@@ -548,6 +548,10 @@ if __name__ == "__main__":
 
     dp_rank = dp_mesh.get_local_rank()
     cp_rotate_method = str(args.cp_rotate)
+
+    if cp_enabled and local_rank == 0:
+        print(f"CP ROTATE METHOD: {cp_rotate_method}")
+
     # Training context factory
     train_context = get_train_context(enable_compiled_autograd=True)
 
@@ -569,7 +573,6 @@ if __name__ == "__main__":
     validation_batch_size = 1  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
-    acc_steps = 0  # TODO: not implemented here yet
     lr = 7e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
@@ -676,7 +679,7 @@ if __name__ == "__main__":
                 "seed": seed,
                 "train_on_inputs": train_on_inputs,
                 "epochs": epochs,
-                "acc_steps": acc_steps,
+                "acc_steps": gradient_accumulation_steps,
                 "batch_size": train_batch_size,
                 "total_batch_size": train_batch_size * world_size,
                 "scheduler_type": scheduler_type,
