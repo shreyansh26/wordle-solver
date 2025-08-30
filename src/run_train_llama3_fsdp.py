@@ -558,15 +558,15 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_attn_fsdp2_cp_torch_compile_dcp_kimi_k2_v2_sft"
+    notes = "llama32_3b_fsdp_flash_attn_fsdp2_cp_torch_compile_dcp_kimi_k2_v2_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 12288  # adjust as needed
     gradient_checkpointing = True
     clip_gradients = True
     shuffle = True  # multipack sampler already does random sampling
-    train_batch_size = 1 # adjust as needed
-    validation_batch_size = 1  # adjust as needed
+    train_batch_size = 2 # adjust as needed
+    validation_batch_size = 2  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
     acc_steps = 0  # TODO: not implemented here yet
@@ -575,9 +575,9 @@ if __name__ == "__main__":
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
     packing = None # None, "ffd"
-    compile = False
+    compile = True
     use_flash_attn_api = False  # whether to use Flash Attention instead of SDPA
-    use_flash_attn_sdpa = False  # whether to use Flash Attention backend from SDPA
+    use_flash_attn_sdpa = True  # whether to use Flash Attention backend from SDPA
 
     if local_rank == 0:
         print(f"OUTPUT DIR: {output_dir}")
@@ -691,8 +691,7 @@ if __name__ == "__main__":
         print("Skipping activation checkpointing under CP to avoid inplace autograd issues with checkpointed graphs")
 
     loss_fn = cross_entropy_loss
-    if compile:
-        loss_fn = compile_loss(loss_fn, backend="inductor")
+    loss_fn = compile_loss(loss_fn, backend="inductor")
 
     model.train()
     dist.barrier()
@@ -759,7 +758,7 @@ if __name__ == "__main__":
                 del loss, logits
                 if cp_enabled:
                     del freqs_cis_clone
-                
+                    
                 current_step += 1
                 actual_accumulation_steps += 1
 
@@ -876,3 +875,13 @@ if __name__ == "__main__":
         storage_writer=storage_writer,
         checkpoint_state=checkpoint_state,
     )
+
+    # Cleanup distributed resources
+    if local_rank == 0:
+        print("Training completed. Cleaning up distributed resources...")
+    
+    dist.barrier()
+    dist.destroy_process_group()
+    
+    if local_rank == 0:
+        print("Process group destroyed successfully.")
