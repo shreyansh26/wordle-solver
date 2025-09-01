@@ -14,15 +14,6 @@ from torch.distributed import checkpoint as dcp
 from torch.distributed.checkpoint import FileSystemWriter as StorageWriter
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed._tensor import Shard, Replicate
-from torch.distributed._tensor import DTensor, distribute_tensor
-from torch.distributed.tensor.parallel import (
-    parallelize_module,
-    ColwiseParallel,
-    RowwiseParallel,
-    PrepareModuleInput,
-    SequenceParallel,
-)
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
 from utils.state_dict_utils import to_hf
@@ -88,27 +79,23 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
         pred.reshape(-1, pred.size(-1)).float(), labels.reshape(-1)
     )
 
-def load_model(model_path, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False, tp_enabled: bool = False):
+def load_model(model_path, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
     with torch.device("meta"):
         model = Transformer(model_args, use_flash_attn_api=use_flash_attn_api, use_flash_attn_sdpa=use_flash_attn_sdpa)
     
     model = model.to_empty(device="cpu")
     state_dict = torch.load(f"{model_path}/consolidated.00.pth", weights_only=True, mmap=True)
-    
-    if tp_enabled:
-        model.load_state_dict(state_dict)
-    else: 
-        model.load_state_dict(state_dict, assign=True)
+    model.load_state_dict(state_dict, assign=True)
 
     # Load freqs_cis separately
     with torch.no_grad():
         model.freqs_cis = model._precompute_freqs_cis()
     return model
 
-def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False, tp_enabled: bool = False):
+def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False):
     config = transformers.AutoConfig.from_pretrained(
         model_name,
-        token=hf_token,
+        use_auth_token=hf_token,
     )
     config.use_cache = False
 
@@ -121,14 +108,14 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
     params['max_seq_len'] = 131072
     model_args = ModelArgs(**params)
 
-    model = load_model(model_path, model_args, use_flash_attn_api=use_flash_attn_api, use_flash_attn_sdpa=use_flash_attn_sdpa, tp_enabled=tp_enabled)
+    model = load_model(model_path, model_args, use_flash_attn_api=use_flash_attn_api, use_flash_attn_sdpa=use_flash_attn_sdpa)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
         model_max_length=max_length,
         padding_side="right",
         use_fast=False,
-        token=hf_token,
+        use_auth_token=hf_token,
         trust_remote_code=True,
     )
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -140,13 +127,13 @@ def compile_model(model, backend="inductor", fullgraph=False):
         transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=fullgraph)
         model.layers.register_module(layer_id, transformer_block)
 
-def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False):
+def apply_fsdp(model, dp_mesh: DeviceMesh | None = None):
     fsdp_kwargs = {
         "mp_policy": MixedPrecisionPolicy(
             param_dtype=torch.bfloat16,
             reduce_dtype=torch.bfloat16,
         ),
-        "reshard_after_forward": False if tp_enabled else True,  # Always False for TP compatibility
+        "reshard_after_forward": True
     }
     if dp_mesh is not None:
         fsdp_kwargs["mesh"] = dp_mesh
@@ -512,7 +499,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--async-dcp", dest="use_async_dcp", action="store_true", help="Enable async DCP checkpointing")
     parser.add_argument("--async-dcp-pinned", dest="use_pinned_writer", action="store_true", help="Use pinned-memory writer with async DCP")
-    parser.add_argument("--tp-degree", type=int, default=1, help="Tensor parallel degree (1 disables TP)")
     parser.add_argument("--cp-degree", type=int, default=1, help="Context parallel degree (1 disables CP)")
     parser.add_argument(
         "--cp-rotate",
@@ -538,68 +524,36 @@ if __name__ == "__main__":
     _backend = "cpu:gloo,cuda:nccl" if use_async_dcp else "nccl"
     dist.init_process_group(_backend, rank=local_rank, world_size=world_size)
     device = torch.device(f"cuda:{local_rank}")
-    # Build device mesh for DP x TP x (optional) CP
-    tp_degree = int(args.tp_degree)
-    if tp_degree < 1:
-        raise ValueError("--tp-degree must be >= 1")
-    
+    # Build 2D device mesh for DP x CP if CP is enabled; else 1D mesh on DP only
     cp_degree = int(args.cp_degree)
     if cp_degree < 1:
         raise ValueError("--cp-degree must be >= 1")
+    if cp_degree > 1 and (world_size % cp_degree != 0):
+        raise ValueError(f"WORLD_SIZE {world_size} must be divisible by cp-degree {cp_degree}")
     
-    if world_size % (tp_degree * cp_degree) != 0:
-        raise ValueError(f"WORLD_SIZE {world_size} must be divisible by tp-degree*cp-degree {tp_degree*cp_degree}")
+    dp_degree = world_size // cp_degree
 
-    dp_degree = world_size // (tp_degree * cp_degree)
-
-    if cp_degree > 1 and tp_degree > 1:
-        mesh_3d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, tp_degree, cp_degree)
-        world_mesh = DeviceMesh("cuda", mesh_3d, mesh_dim_names=("dp", "tp", "cp"))
-        dp_mesh = world_mesh["dp"]
-        tp_mesh = world_mesh["tp"]
-        cp_mesh = world_mesh["cp"]
-        tp_enabled = True
-        cp_enabled = True
-    elif cp_degree == 1 and tp_degree > 1:
-        mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, tp_degree)
-        world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "tp"))
-        dp_mesh = world_mesh["dp"]
-        tp_mesh = world_mesh["tp"]
-        cp_mesh = None
-        tp_enabled = True
-        cp_enabled = False
-    elif cp_degree > 1 and tp_degree == 1:
+    if cp_degree > 1:
         mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, cp_degree)
         world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "cp"))
         dp_mesh = world_mesh["dp"]
         cp_mesh = world_mesh["cp"]
-        tp_mesh = None
-        tp_enabled = False
         cp_enabled = True
     else:
         mesh_1d = torch.arange(world_size, device=torch.device("cpu"))
         world_mesh = DeviceMesh("cuda", mesh_1d, mesh_dim_names=("dp",))
         dp_mesh = world_mesh
-        tp_mesh = None
         cp_mesh = None
-        tp_enabled = False
         cp_enabled = False
 
     dp_rank = dp_mesh.get_local_rank()
     cp_rotate_method = str(args.cp_rotate)
 
-    if tp_enabled and local_rank == 0:
-        print(f"TP DEGREE: {tp_degree}")
     if cp_enabled and local_rank == 0:
         print(f"CP ROTATE METHOD: {cp_rotate_method}")
 
     # Training context factory
-    # Compiled autograd can hold references that conflict with FSDP2 param freeing.
-    # Disable to avoid post-backward reshard/free errors under FSDP2+TP.
-    if tp_enabled:
-        train_context = get_train_context(enable_compiled_autograd=False)
-    else:
-        train_context = get_train_context(enable_compiled_autograd=True)
+    train_context = get_train_context(enable_compiled_autograd=True)
 
     model_name = "meta-llama/Llama-3.2-3B-Instruct"
     scheduler_type = "cosine"
@@ -639,95 +593,15 @@ if __name__ == "__main__":
             max_length % (2 * cp_degree) == 0
         ), f"max_length {max_length} must be divisible by 2*cp_degree={2*cp_degree} when CP is enabled"
 
-    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn_api, use_flash_attn_sdpa, tp_enabled)
+    model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn_api, use_flash_attn_sdpa)
     num_params = sum([p.numel() for p in model.parameters()])
 
-    # Move model to device before applying TP and FSDP
-    # model = model.to("cpu")
-
-    # Apply Tensor Parallel plan before compilation and FSDP wrapping
-    if tp_enabled:
-        if local_rank == 0:
-            print("Applying Tensor Parallel parallelization plan...")
-        # Parallelize top-level modules
-        model = parallelize_module(
-            model,
-            tp_mesh,
-            {
-                "tok_embeddings": RowwiseParallel(
-                    input_layouts=Replicate(),
-                    output_layouts=Shard(1),
-                ),
-                "norm": SequenceParallel(),
-                "output": ColwiseParallel(
-                    input_layouts=Shard(1),
-                    output_layouts=Replicate(),
-                    # Return local Tensor for logits so downstream loss works without DTensor support
-                    # use_local_output=True,
-                ),
-            },
-        )
-
-        # Parallelize each transformer block
-        for layer_id, transformer_block in model.layers.named_children():
-            layer_tp_plan = {
-                "attention_norm": SequenceParallel(),
-                # attention(x, freqs_cis, attention_mask, position_ids)
-                # Only the first arg (x) is positional; others are kwargs.
-                # Provide layout mapping for positional args only to avoid length mismatch.
-                "attention": PrepareModuleInput(
-                    input_layouts=(Shard(1),),
-                    desired_input_layouts=(Replicate(),),
-                ),
-                "attention.wq": ColwiseParallel(use_local_output=False),
-                "attention.wk": ColwiseParallel(use_local_output=False),
-                "attention.wv": ColwiseParallel(use_local_output=False),
-                "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
-                "ffn_norm": SequenceParallel(),
-                "feed_forward": PrepareModuleInput(
-                    input_layouts=(Shard(1),),
-                    desired_input_layouts=(Replicate(),),
-                ),
-                "feed_forward.w1": ColwiseParallel(),
-                "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
-                "feed_forward.w3": ColwiseParallel(),
-            }
-
-            parallelize_module(
-                module=transformer_block,
-                device_mesh=tp_mesh,
-                parallelize_plan=layer_tp_plan,
-            )
-
-        # Store mesh for hooks and register a pre-hook to convert kwargs to DTensor(Replicate)
-        # model._tp_mesh = tp_mesh
-
-        # def _tp_kwargs_to_dtensor_hook(module, args, kwargs):
-        #     # Avoid converting kwargs here to prevent introducing DTensors where
-        #     # downstream ops expect regular Tensors (e.g., attention mask utils).
-        #     # Rotary handling will reconcile types inside apply_rotary_emb.
-        #     return args, kwargs
-
-        # # Attach mesh to each attention module for clarity and register hook with kwargs support
-        # for _, transformer_block in model.layers.named_children():
-        #     attention_module = getattr(transformer_block, "attention", None)
-        #     if attention_module is not None:
-        #         setattr(attention_module, "_tp_mesh", tp_mesh)
-        #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
-
-    if compile and not tp_enabled:
+    if compile:
         torch._dynamo.config.capture_scalar_outputs = True
         backend = "inductor"
         compile_model(model, backend=backend, fullgraph=False)
     
-    apply_fsdp(model, dp_mesh=dp_mesh, tp_enabled=tp_enabled)
-
-    if tp_enabled:
-        # Move freqs_cis to device and distribute after FSDP
-        with torch.no_grad():
-            # Ensure freqs_cis is properly distributed as replicated tensor
-            if not isinstance(model.freqs_cis, DTensor):
-                model.freqs_cis = distribute_tensor(model.freqs_cis.to(device), tp_mesh, [Replicate()])
+    apply_fsdp(model, dp_mesh=dp_mesh)
 
     assert isinstance(model, FSDPModule)
 
@@ -814,10 +688,10 @@ if __name__ == "__main__":
             },
         )
 
-    if gradient_checkpointing and not (cp_enabled or tp_enabled):
+    if gradient_checkpointing and not cp_enabled:
         apply_activation_checkpointing(model, "full")
-    elif gradient_checkpointing and (cp_enabled or tp_enabled) and local_rank == 0:
-        print("Skipping activation checkpointing under TP/CP to avoid interactions with sharded params and checkpointed graphs")
+    elif gradient_checkpointing and cp_enabled and local_rank == 0:
+        print("Skipping activation checkpointing under CP to avoid inplace autograd issues with checkpointed graphs")
 
     loss_fn = cross_entropy_loss
     loss_fn = compile_loss(loss_fn, backend="inductor")
@@ -841,9 +715,8 @@ if __name__ == "__main__":
             acc_loss = torch.tensor(0.0, device=device)
             actual_accumulation_steps = 0
             for acc_step in range(gradient_accumulation_steps):
-                # Handle gradient sync properly for FSDP+TP
                 model.require_backward_grad_sync = (acc_step == gradient_accumulation_steps - 1) or \
-                                                        (current_step == total_steps_per_epoch - 1)
+                                                    (current_step == total_steps_per_epoch - 1)
                 try:
                     batch = next(train_iterator)
                 except StopIteration:
@@ -884,14 +757,10 @@ if __name__ == "__main__":
                 # backward inside the same context
                 loss.backward()
                 
-                # Clean up to reduce memory fragmentation and avoid storage issues
+                # Clean up to reduce memory fragmentation
                 del loss, logits
                 if cp_enabled:
                     del freqs_cis_clone
-                
-                # Force garbage collection for TP to avoid storage corruption
-                if tp_enabled:
-                    torch.cuda.empty_cache()
                     
                 current_step += 1
                 actual_accumulation_steps += 1
@@ -913,7 +782,7 @@ if __name__ == "__main__":
             optimizer.zero_grad(set_to_none=True)
 
             # avg loss over DP processes only
-            dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
+            dp_group = dp_mesh.get_group() if cp_enabled else None
             acc_loss = get_all_reduce_mean(acc_loss, group=dp_group).item()
 
             if local_rank == 0:
@@ -966,7 +835,7 @@ if __name__ == "__main__":
                 if validation_loss is None:
                     validation_loss = torch.tensor(0.0, device=device)
                 validation_loss = validation_loss / (step + 1)
-                dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
+                dp_group = dp_mesh.get_group() if cp_enabled else None
                 val_loss = get_all_reduce_mean(validation_loss.clone(), group=dp_group).item()
                 if local_rank == 0:
                     print(f"Validation Loss {val_loss:.4f}")
