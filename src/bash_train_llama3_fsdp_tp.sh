@@ -1,0 +1,1 @@
+torchrun --nnodes=1 --nproc-per-node=4 --master_port 29501 run_train_llama3_fsdp.py --async-dcp --tp-degree 2
