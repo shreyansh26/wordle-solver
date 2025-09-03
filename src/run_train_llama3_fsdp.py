@@ -84,9 +84,22 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
     pred = pred[:, :-1, :].contiguous()
     labels = labels[:, 1:].contiguous()
 
-    return torch.nn.functional.cross_entropy(
-        pred.reshape(-1, pred.size(-1)).float(), labels.reshape(-1)
+    loss_sum = torch.nn.functional.cross_entropy(
+        pred.reshape(-1, pred.size(-1)).float(),
+        labels.reshape(-1),
+        ignore_index=-100,
+        reduction="mean",
     )
+
+    # Count valid tokens (non-padding)
+    valid_tokens = (labels.reshape(-1) != -100).sum().float()
+    
+    # Return per-token loss, handling empty segments gracefully
+    if valid_tokens > 0:
+        return loss_sum / valid_tokens
+    else:
+        # Return 0 loss for completely empty segments (instead of NaN)
+        return torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
 
 def load_model(model_path, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False, tp_enabled: bool = False):
     with torch.device("meta"):
@@ -266,6 +279,7 @@ def evaluation(
         losses += loss.float()
 
     losses = losses / (step + 1)
+    # Under eval(), reduce across world (no TP/CP context here)
     val_loss = get_all_reduce_mean(losses.clone()).item()
 
     if local_rank == 0:
@@ -380,14 +394,34 @@ def log_stats(pbar, wandb, epoch, loss_tensor, grad_norm, scheduler, step_size):
 
 
 def get_all_reduce_mean(tensor, group=None):
+    """
+    Mean-reduce across the provided group; if None, reduce across the world.
+    Use DP group for FSDP+TP and FSDP+CP. TP produces replicated scalars and
+    CP loss is computed per-shard; averaging across DP is sufficient for stable
+    metrics without over-reduction.
+    """
     if group is not None:
         torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM, group=group)
-        tensor = tensor / group.size()
+        denom = torch.distributed.get_world_size(group=group)
     else:
         torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
-        tensor = tensor / torch.distributed.get_world_size()
+        denom = torch.distributed.get_world_size()
+    tensor = tensor / denom
     return tensor
 
+def reduce_loss_and_count_across_dp_cp(loss_sum: torch.Tensor, token_count: torch.Tensor, dp_group, cp_group) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    All-reduce loss_sum and token_count across DP×CP to form global averages for metrics.
+    This does not affect the backward path; it is only for logging/eval correctness.
+    Expects scalar tensors on the current device.
+    """
+    if dp_group is not None:
+        torch.distributed.all_reduce(loss_sum, op=torch.distributed.ReduceOp.SUM, group=dp_group)
+        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=dp_group)
+    if cp_group is not None:
+        torch.distributed.all_reduce(loss_sum, op=torch.distributed.ReduceOp.SUM, group=cp_group)
+        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=cp_group)
+    return loss_sum, token_count
 
 def get_warmup_steps(num_training_steps, warmup_ratio=0.05):
     return math.ceil(num_training_steps * warmup_ratio)
@@ -489,6 +523,7 @@ def save_model(local_rank, model, tokenizer, outpath, current_epoch, current_ste
         checkpoint_state["future"].result()
         checkpoint_state["future"] = None
 
+    model.freqs_cis = model._precompute_freqs_cis()
     cpu_state_dict = get_model_state_dict(
         model=model,
         options=StateDictOptions(
@@ -608,7 +643,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_fsdp_flash_attn_fsdp2_cp_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_tp_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -789,7 +824,7 @@ if __name__ == "__main__":
 
     if local_rank == 0:
         run = wandb.init(
-            project="combined_sft_llama32_3b_fsdp_v2_wordle",
+            project="combined_sft_llama32_3b_fsdp_v3_wordle",
             name=run_id,
             config={
                 "model_name": model_name,
@@ -838,7 +873,8 @@ if __name__ == "__main__":
         )
         current_step = 0
         while True:
-            acc_loss = torch.tensor(0.0, device=device)
+            training_loss_sum = torch.tensor(0.0, device=device)
+            training_token_count = torch.tensor(0.0, device=device)
             actual_accumulation_steps = 0
             for acc_step in range(gradient_accumulation_steps):
                 # Handle gradient sync properly for FSDP+TP
@@ -877,9 +913,22 @@ if __name__ == "__main__":
                 # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
                     logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
-                loss = loss_fn(logits, labels) 
-                acc_loss += loss.item()
-                loss /= gradient_accumulation_steps
+                loss = loss_fn(logits, labels)
+                # accumulate token-weighted loss for DP×CP logging
+                step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+                
+                # Handle case where CP shard has no valid tokens (all masked)
+                if step_tokens == 0:
+                    # Create zero loss connected to model computation graph
+                    # This ensures all CP ranks have consistent gradient flow
+                    loss = (logits * 0.0).sum()  # Connected to model but evaluates to 0
+                    contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+                else:
+                    contrib = loss.detach() * step_tokens
+                
+                training_loss_sum += contrib
+                training_token_count += step_tokens
+                loss = loss / gradient_accumulation_steps
 
                 # backward inside the same context
                 loss.backward()
@@ -899,8 +948,14 @@ if __name__ == "__main__":
                 if current_step == total_steps_per_epoch:
                     break
 
-            acc_loss /= actual_accumulation_steps
-            
+            # form DP×CP-reduced training metric (does not affect backward path)
+            dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
+            cp_group = cp_mesh.get_group() if cp_enabled else None
+            training_loss_sum, training_token_count = reduce_loss_and_count_across_dp_cp(
+                training_loss_sum, training_token_count, dp_group, cp_group
+            )
+            acc_loss_metric = (training_loss_sum / training_token_count.clamp_min(1)).item()
+
             # clipping
             if clip_gradients:
                 grad_norm = clip_model_gradients(model, gradient_clipping)
@@ -912,16 +967,12 @@ if __name__ == "__main__":
             # zero gradients after weight update
             optimizer.zero_grad(set_to_none=True)
 
-            # avg loss over DP processes only
-            dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
-            acc_loss = get_all_reduce_mean(acc_loss, group=dp_group).item()
-
             if local_rank == 0:
                 log_stats(
                     pbar,
                     wandb,
                     round((current_step / total_steps_per_epoch), 2) + epoch,
-                    acc_loss,
+                    acc_loss_metric,
                     grad_norm,
                     scheduler,
                     actual_accumulation_steps
@@ -929,7 +980,8 @@ if __name__ == "__main__":
 
             if current_step == total_steps_per_epoch:
                 # Run eval wrapped in CP if enabled (to maintain sequence sharding behavior)
-                validation_loss = None
+                validation_loss_sum = torch.tensor(0.0, device=device)
+                validation_token_count = torch.tensor(0.0, device=device)
                 for step, batch in enumerate(val_loader):
                     input_ids = batch["input_ids"].to(device)
                     labels = batch["labels"].to(device)
@@ -959,15 +1011,23 @@ if __name__ == "__main__":
                         with train_context(optional_context_parallel_ctx):
                             logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
                     loss_val = loss_fn(logits, labels).float()
-                    # accumulate
-                    if validation_loss is None:
-                        validation_loss = torch.tensor(0.0, device=device)
-                    validation_loss += loss_val
-                if validation_loss is None:
-                    validation_loss = torch.tensor(0.0, device=device)
-                validation_loss = validation_loss / (step + 1)
+                    step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+                    
+                    # Handle empty CP shards in validation
+                    if step_tokens == 0:
+                        contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+                    else:
+                        contrib = loss_val.detach() * step_tokens
+                    
+                    validation_loss_sum += contrib
+                    validation_token_count += step_tokens
+                # Reduce metrics across DP×CP
                 dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
-                val_loss = get_all_reduce_mean(validation_loss.clone(), group=dp_group).item()
+                cp_group = cp_mesh.get_group() if cp_enabled else None
+                validation_loss_sum, validation_token_count = reduce_loss_and_count_across_dp_cp(
+                    validation_loss_sum, validation_token_count, dp_group, cp_group
+                )
+                val_loss = (validation_loss_sum / validation_token_count.clamp_min(1)).item()
                 if local_rank == 0:
                     print(f"Validation Loss {val_loss:.4f}")
                     wandb.log({"val_loss": val_loss})
