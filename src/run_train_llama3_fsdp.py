@@ -283,7 +283,7 @@ def evaluation(
     val_loss = get_all_reduce_mean(losses.clone()).item()
 
     if local_rank == 0:
-        print(f"Validation Loss {val_loss:.4f}")
+        print(f"Validation Loss {val_loss:.6f}")
 
     if local_rank == 0:
         wandb.log(
@@ -386,7 +386,7 @@ def log_stats(pbar, wandb, epoch, loss_tensor, grad_norm, scheduler, step_size):
         },
     )
 
-    current_loss = f"{loss_tensor:.4f}"
+    current_loss = f"{loss_tensor:.6f}"
     current_lr = f"{last_lr:.10f}"
 
     pbar.set_description(f"Epoch {epoch:.2f}, Loss: {current_loss}, LR: {current_lr}")
@@ -779,8 +779,8 @@ if __name__ == "__main__":
     
     # train_ds = ["../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl"]
     # val_ds = ["../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl"]
-    train_ds = ["../data/sft/train/deepseek_r1_data_train.jsonl"]
-    val_ds = ["../data/sft/train/deepseek_r1_data_val.jsonl"]
+    train_ds = ["../data/sft/train/deepseek_r1_data_train_sft_train_llama.jsonl"]
+    val_ds = ["../data/sft/train/deepseek_r1_data_val_sft_val_llama.jsonl"]
 
     train_dataset = SupervisedDataset(train_on_inputs, tokenizer, train_ds, packing=packing)
     val_dataset = SupervisedDataset(train_on_inputs, tokenizer, val_ds, packing=packing)
@@ -1029,7 +1029,7 @@ if __name__ == "__main__":
                 )
                 val_loss = (validation_loss_sum / validation_token_count.clamp_min(1)).item()
                 if local_rank == 0:
-                    print(f"Validation Loss {val_loss:.4f}")
+                    print(f"Validation Loss {val_loss:.6f}")
                     wandb.log({"val_loss": val_loss})
 
                 if not use_async_dcp:
