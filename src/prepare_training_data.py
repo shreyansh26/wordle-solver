@@ -8,8 +8,8 @@ from transformers import AutoTokenizer
 
 random.seed(1337)
 MAX_LENGTH = 12288 # 12288
-DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
-# DATASET_DIR = '../data/sft/deepseek-ai_DeepSeek-R1-0528'
+# DATASET_DIR = '../data/sft/moonshotai_Kimi-K2-Instruct'
+DATASET_DIR = '../data/sft/deepseek-ai_DeepSeek-R1-0528'
 # DATASET_DIR = '../data/sft/openai_gpt-oss-120b'
 
 def dump_to_jsonl(records, path):
@@ -91,8 +91,8 @@ def get_formatted_training_example(row, tokenizer):
         }
 
 if __name__ == "__main__":
-    df = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary_v2.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
-    # df = pd.read_csv('../data/sft/train/deepseek_r1_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
+    # df = pd.read_csv('../data/sft/train/moonshot_kimi_k2_summary_v2.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
+    df = pd.read_csv('../data/sft/train/deepseek_r1_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
     # df = pd.read_csv('../data/sft/train/openai_gpt_oss-120b_summary.csv', dtype={'word': str, 'num_rows': int, 'is_successful': str})
     df = df[df['is_successful'] == "SUCCESS"]
     print("Successful words:", df.shape[0])
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-3B-Instruct")
 
-    DO_RL = True
+    DO_RL = False
 
     if DO_RL:
         SFT_PERC = 0.6
@@ -207,25 +207,27 @@ if __name__ == "__main__":
     random.shuffle(val_records_rl)
 
     print("Num rows:", len(records))
-    dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data_v2_llama.jsonl')
-    # dump_to_jsonl(records, '../data/sft/train/deepseek_r1_data.jsonl')
+    # dump_to_jsonl(records, '../data/sft/train/moonshot_kimi_k2_data_v2_llama.jsonl')
+    dump_to_jsonl(records, '../data/sft/train/deepseek_r1_data_llama.jsonl')
     # dump_to_jsonl(records, '../data/sft/train/openai_gpt_oss-120b_data.jsonl')
 
     print("Num rows train (sft):", len(train_records_sft))
-    dump_to_jsonl(train_records_sft, '../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl')
-    # dump_to_jsonl(train_records_sft, '../data/sft/train/deepseek_r1_data_train.jsonl')
+    # dump_to_jsonl(train_records_sft, '../data/sft/train/moonshot_kimi_k2_data_train_v2_sft_train_llama.jsonl')
+    dump_to_jsonl(train_records_sft, '../data/sft/train/deepseek_r1_data_train_sft_train_llama.jsonl')
     # dump_to_jsonl(train_records_sft, '../data/sft/train/openai_gpt_oss-120b_data_sft_train.jsonl')
 
     print("Num rows val (sft):", len(val_records_sft))
-    dump_to_jsonl(val_records_sft, '../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl')
-    # dump_to_jsonl(val_records_sft, '../data/sft/train/deepseek_r1_data_val.jsonl')
+    # dump_to_jsonl(val_records_sft, '../data/sft/train/moonshot_kimi_k2_data_val_v2_sft_val_llama.jsonl')
+    dump_to_jsonl(val_records_sft, '../data/sft/train/deepseek_r1_data_val_sft_val_llama.jsonl')
     # dump_to_jsonl(val_records_sft, '../data/sft/train/openai_gpt_oss-120b_data_sft_val.jsonl')
 
     if DO_RL:
         print("Num rows train (rl):", len(train_records_rl))
-        dump_to_jsonl(train_records_rl, '../data/sft/train/moonshot_kimi_k2_data_train_v2_rl_train_llama.jsonl')
+        # dump_to_jsonl(train_records_rl, '../data/sft/train/moonshot_kimi_k2_data_train_v2_rl_train_llama.jsonl')
+        dump_to_jsonl(train_records_rl, '../data/sft/train/deepseek_r1_data_train_rl_train_llama.jsonl')
         # dump_to_jsonl(train_records_rl, '../data/sft/train/openai_gpt_oss-120b_data_rl_train.jsonl')
 
         print("Num rows val (rl):", len(val_records_rl))
-        dump_to_jsonl(val_records_rl, '../data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_llama.jsonl')
+        # dump_to_jsonl(val_records_rl, '../data/sft/train/moonshot_kimi_k2_data_val_v2_rl_val_llama.jsonl')
+        dump_to_jsonl(val_records_rl, '../data/sft/train/deepseek_r1_data_val_rl_val_llama.jsonl')
         # dump_to_jsonl(val_records_rl, '../data/sft/train/openai_gpt_oss-120b_data_rl_val.jsonl')
