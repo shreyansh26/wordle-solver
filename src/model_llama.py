@@ -71,7 +71,9 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Ten
     ndim = x.ndim
     assert ndim > 1
     seqlen = x.shape[1]
-    freqs_cis = freqs_cis[0:seqlen]
+    # Slice to sequence length and materialize a private, detached copy to avoid
+    # autograd versioning issues if the original buffer is mutated by CP.
+    freqs_cis = freqs_cis[0:seqlen].detach().clone()
     assert freqs_cis.shape == (seqlen, x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
@@ -1046,6 +1048,10 @@ class Transformer(nn.Module):
         """
         # passthrough for nonexistent layers, allows easy configuration of pipeline parallel stages
         h = self.tok_embeddings(input_ids) if self.tok_embeddings else input_ids
+
+        # Ensure rotary buffer is on the same device as activations (important under CP/FSDP)
+        if self.freqs_cis.device != h.device:
+            self.freqs_cis = self.freqs_cis.to(h.device)
 
         for layer in self.layers.values():
             h = layer(h, self.freqs_cis, attention_mask, position_ids)

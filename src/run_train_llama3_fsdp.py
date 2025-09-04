@@ -84,11 +84,12 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
     pred = pred[:, :-1, :].contiguous()
     labels = labels[:, 1:].contiguous()
 
+    # Use SUM reduction and divide by valid tokens for true per-token average
     loss_sum = torch.nn.functional.cross_entropy(
         pred.reshape(-1, pred.size(-1)).float(),
         labels.reshape(-1),
         ignore_index=-100,
-        reduction="mean",
+        reduction="sum",
     )
 
     # Count valid tokens (non-padding)
@@ -149,9 +150,14 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
     return model, tokenizer, config, model_args
 
 def compile_model(model, backend="inductor", fullgraph=False):
+    # Compile only safe submodules (avoid attention/rotary complex ops under CP)
     for layer_id, transformer_block in model.layers.named_children():
-        transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=fullgraph)
-        model.layers.register_module(layer_id, transformer_block)
+        if hasattr(transformer_block, "feed_forward"):
+            transformer_block.feed_forward = torch.compile(
+                transformer_block.feed_forward, backend=backend, fullgraph=fullgraph
+            )
+    if hasattr(model, "output") and isinstance(model.output, torch.nn.Module):
+        model.output = torch.compile(model.output, backend=backend, fullgraph=fullgraph)
 
 def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False):
     fsdp_kwargs = {
@@ -631,7 +637,8 @@ if __name__ == "__main__":
     # Training context factory
     # Compiled autograd can hold references that conflict with FSDP2 param freeing.
     # Disable to avoid post-backward reshard/free errors under FSDP2+TP.
-    if tp_enabled:
+    if tp_enabled or cp_enabled:
+        # Avoid compiled autograd with FSDP2 + TP/CP to prevent param freeing conflicts
         train_context = get_train_context(enable_compiled_autograd=False)
     else:
         train_context = get_train_context(enable_compiled_autograd=True)
@@ -643,7 +650,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_tp_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -750,6 +757,7 @@ if __name__ == "__main__":
         #         setattr(attention_module, "_tp_mesh", tp_mesh)
         #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
 
+    # Allow compilation under CP, but keep it disabled for TP
     if compile and not tp_enabled:
         torch._dynamo.config.capture_scalar_outputs = True
         backend = "inductor"
@@ -893,9 +901,11 @@ if __name__ == "__main__":
                 # Optional CP context
                 optional_context_parallel_ctx = None
                 if cp_enabled:
-                    # Clone freqs_cis to avoid in-place modifications during CP
-                    freqs_cis_clone = model.freqs_cis.clone()
-                    cp_buffers = [input_ids, labels, freqs_cis_clone]
+                    # Ensure freqs_cis is on the compute device and pass the SAME buffer
+                    # reference used by the model so CP can manage its sequence sharding/rotation.
+                    if model.freqs_cis.device != device:
+                        model.freqs_cis = model.freqs_cis.to(device)
+                    cp_buffers = [input_ids, labels, model.freqs_cis]
                     cp_seq_dims = [1, 1, 0]
                     if attention_mask is not None:
                         cp_buffers.append(attention_mask)
@@ -913,6 +923,7 @@ if __name__ == "__main__":
                 # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
                     logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                # Compute loss directly
                 loss = loss_fn(logits, labels)
                 # accumulate token-weighted loss for DP×CP logging
                 step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
@@ -935,8 +946,6 @@ if __name__ == "__main__":
                 
                 # Clean up to reduce memory fragmentation and avoid storage issues
                 del loss, logits
-                if cp_enabled:
-                    del freqs_cis_clone
                 
                 # Force garbage collection for TP to avoid storage corruption
                 if tp_enabled:
@@ -989,9 +998,10 @@ if __name__ == "__main__":
                     position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
                     optional_context_parallel_ctx = None
                     if cp_enabled:
-                        # Clone freqs_cis to avoid in-place modifications during CP
-                        freqs_cis_clone = model.freqs_cis.clone()
-                        cp_buffers = [input_ids, labels, freqs_cis_clone]
+                        # Ensure freqs_cis is on device and pass the actual buffer used by the model
+                        if model.freqs_cis.device != device:
+                            model.freqs_cis = model.freqs_cis.to(device)
+                        cp_buffers = [input_ids, labels, model.freqs_cis]
                         cp_seq_dims = [1, 1, 0]
                         if attention_mask is not None:
                             cp_buffers.append(attention_mask)
