@@ -149,15 +149,15 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
     
     return model, tokenizer, config, model_args
 
-def compile_model(model, backend="inductor", fullgraph=False):
+def compile_model(model, fullgraph=False):
     # Compile only safe submodules (avoid attention/rotary complex ops under CP)
     for layer_id, transformer_block in model.layers.named_children():
         if hasattr(transformer_block, "feed_forward"):
             transformer_block.feed_forward = torch.compile(
-                transformer_block.feed_forward, backend=backend, fullgraph=fullgraph
+                transformer_block.feed_forward, fullgraph=fullgraph
             )
     if hasattr(model, "output") and isinstance(model.output, torch.nn.Module):
-        model.output = torch.compile(model.output, backend=backend, fullgraph=fullgraph)
+        model.output = torch.compile(model.output, fullgraph=fullgraph)
 
 def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False):
     fsdp_kwargs = {
@@ -438,6 +438,52 @@ def get_decay_steps(num_training_steps, decay_ratio=0.25):
 def clip_model_gradients(model, max_grad_norm):
     return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm).item()
 
+def clip_grad_norm_sharded(model, max_grad_norm: float, dp_mesh: DeviceMesh | None = None, tp_mesh: DeviceMesh | None = None) -> float:
+    """
+    Compute and apply global grad norm clipping when params/grads are sharded by FSDP2 (DP)
+    and/or TP. Avoids stacking mixed-mesh DTensors by operating on local shards and
+    all-reducing squared norms across DP and TP dimensions.
+
+    Returns the global grad norm (float).
+    """
+    device = None
+    local_sq = torch.tensor(0.0, device=next(model.parameters()).device)
+    for p in model.parameters():
+        if p.grad is None:
+            continue
+        g = p.grad
+        # If DTensor, operate on local shard for norm calculation
+        if isinstance(g, DTensor):
+            g_local = g.to_local()
+        else:
+            g_local = g
+        if device is None:
+            device = g_local.device
+        # Accumulate squared L2 norms in fp32 for stability
+        local_sq += g_local.detach().float().norm(2).pow(2)
+
+    # Reduce across DP then TP to cover all unique shards
+    if dp_mesh is not None:
+        dp_group = dp_mesh.get_group()
+        torch.distributed.all_reduce(local_sq, op=torch.distributed.ReduceOp.SUM, group=dp_group)
+    if tp_mesh is not None:
+        tp_group = tp_mesh.get_group()
+        torch.distributed.all_reduce(local_sq, op=torch.distributed.ReduceOp.SUM, group=tp_group)
+
+    total_norm = local_sq.sqrt().item()
+    if max_grad_norm is None or max_grad_norm <= 0:
+        return total_norm
+
+    clip_coef = max_grad_norm / (total_norm + 1e-6)
+    if clip_coef < 1.0:
+        # Scale grads in-place consistently across shards
+        for p in model.parameters():
+            if p.grad is None:
+                continue
+            p.grad.mul_(clip_coef)
+
+    return total_norm
+
 
 def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
     warmup_steps = get_warmup_steps(max_steps)
@@ -659,9 +705,9 @@ if __name__ == "__main__":
     shuffle = True  # multipack sampler already does random sampling
     train_batch_size = 1 # adjust as needed
     validation_batch_size = 1  # adjust as needed
-    epochs = 5  # adjust as needed
+    epochs = int(args.epochs) if getattr(args, "epochs", None) else 5
     gradient_accumulation_steps = 4
-    lr = 5e-05 # 5e-06  # adjust as needed
+    lr = 7e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
@@ -705,7 +751,7 @@ if __name__ == "__main__":
                     input_layouts=Shard(1),
                     output_layouts=Replicate(),
                     # Return local Tensor for logits so downstream loss works without DTensor support
-                    # use_local_output=True,
+                    use_local_output=True,
                 ),
             },
         )
@@ -714,16 +760,13 @@ if __name__ == "__main__":
         for layer_id, transformer_block in model.layers.named_children():
             layer_tp_plan = {
                 "attention_norm": SequenceParallel(),
-                # attention(x, freqs_cis, attention_mask, position_ids)
-                # Only the first arg (x) is positional; others are kwargs.
-                # Provide layout mapping for positional args only to avoid length mismatch.
                 "attention": PrepareModuleInput(
-                    input_layouts=(Shard(1),),
-                    desired_input_layouts=(Replicate(),),
+                    input_layouts=(Shard(1), None),
+                    desired_input_layouts=(Replicate(), None),
                 ),
-                "attention.wq": ColwiseParallel(use_local_output=False),
-                "attention.wk": ColwiseParallel(use_local_output=False),
-                "attention.wv": ColwiseParallel(use_local_output=False),
+                "attention.wq": ColwiseParallel(),
+                "attention.wk": ColwiseParallel(),
+                "attention.wv": ColwiseParallel(),
                 "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
                 "ffn_norm": SequenceParallel(),
                 "feed_forward": PrepareModuleInput(
@@ -758,19 +801,19 @@ if __name__ == "__main__":
         #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
 
     # Allow compilation under CP, but keep it disabled for TP
-    if compile and not tp_enabled:
+    if compile:
         torch._dynamo.config.capture_scalar_outputs = True
-        backend = "inductor"
-        compile_model(model, backend=backend, fullgraph=False)
+        # backend = "inductor"
+        compile_model(model, fullgraph=False)
     
     apply_fsdp(model, dp_mesh=dp_mesh, tp_enabled=tp_enabled)
 
-    if tp_enabled:
-        # Move freqs_cis to device and distribute after FSDP
-        with torch.no_grad():
-            # Ensure freqs_cis is properly distributed as replicated tensor
-            if not isinstance(model.freqs_cis, DTensor):
-                model.freqs_cis = distribute_tensor(model.freqs_cis.to(device), tp_mesh, [Replicate()])
+    # if tp_enabled:
+    #     # Move freqs_cis to device and distribute after FSDP
+    #     with torch.no_grad():
+    #         # Ensure freqs_cis is properly distributed as replicated tensor
+    #         if not isinstance(model.freqs_cis, DTensor):
+    #             model.freqs_cis = distribute_tensor(model.freqs_cis.to(device), tp_mesh, [Replicate()])
 
     assert isinstance(model, FSDPModule)
 
@@ -922,7 +965,7 @@ if __name__ == "__main__":
                     )
                 # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
-                    logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                    logits = model(input_ids)
                 # Compute loss directly
                 loss = loss_fn(logits, labels)
                 # accumulate token-weighted loss for DP×CP logging
@@ -967,7 +1010,10 @@ if __name__ == "__main__":
 
             # clipping
             if clip_gradients:
-                grad_norm = clip_model_gradients(model, gradient_clipping)
+                if tp_enabled or cp_enabled:
+                    grad_norm = clip_grad_norm_sharded(model, gradient_clipping, dp_mesh=dp_mesh, tp_mesh=tp_mesh if tp_enabled else None)
+                else:
+                    grad_norm = clip_model_gradients(model, gradient_clipping)
 
             # weight update
             optimizer.step()
@@ -1019,7 +1065,7 @@ if __name__ == "__main__":
                     model.eval()
                     with torch.no_grad():
                         with train_context(optional_context_parallel_ctx):
-                            logits = model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+                            logits = model(input_ids)
                     loss_val = loss_fn(logits, labels).float()
                     step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
                     
