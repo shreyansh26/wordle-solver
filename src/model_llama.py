@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from utils.attn_mask_utils import _prepare_4d_causal_attention_mask
+from torch.distributed._tensor import DTensor, distribute_tensor, Replicate
 
 try:
     from flash_attn import flash_attn_varlen_func
@@ -102,6 +103,9 @@ def apply_rotary_emb(
     """
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    # If inputs are DTensors (under TP), ensure freqs_cis is also a DTensor (Replicate)
+    # if isinstance(xq, DTensor) and not isinstance(freqs_cis, DTensor):
+    #     freqs_cis = distribute_tensor(freqs_cis.to(xq.device), xq.device_mesh, [Replicate()])
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
@@ -671,8 +675,6 @@ class FlashAttentionSDPA(nn.Module):
         self,
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
     ):
         """
         Forward pass of the attention module.
@@ -710,23 +712,6 @@ class FlashAttentionSDPA(nn.Module):
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         xk = xk.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         xv = xv.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-
-        if attention_mask is not None:
-            # Attention mask was made 4D because the `attn_weights` above is 4D.
-            # We probably can make this mask smarter if we want to pack sequences
-            # together, instead of using padding. This optimization can be used in
-            # inference. For training, if we want to pack sequences, data loader
-            # will pass in a mask containing such info.
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,  # None, or user provided mask in 2D
-                (bs, seqlen),
-                x,
-                0,  # past_key_values_length, 0 when training
-            ).to(x.dtype)
-            if attention_mask.size() != (bs, 1, seqlen, seqlen):
-                raise ValueError(
-                    f"Attention mask should be of size {(bs, 1, seqlen, seqlen)}, but is {attention_mask.size()}"
-                )
 
         with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
             output = torch.nn.functional.scaled_dot_product_attention(
@@ -790,8 +775,6 @@ class Attention(nn.Module):
         self,
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
     ):
         """
         Forward pass of the attention module.
@@ -829,23 +812,6 @@ class Attention(nn.Module):
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         xk = xk.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         xv = xv.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-
-        if attention_mask is not None:
-            # Attention mask was made 4D because the `attn_weights` above is 4D.
-            # We probably can make this mask smarter if we want to pack sequences
-            # together, instead of using padding. This optimization can be used in
-            # inference. For training, if we want to pack sequences, data loader
-            # will pass in a mask containing such info.
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,  # None, or user provided mask in 2D
-                (bs, seqlen),
-                x,
-                0,  # past_key_values_length, 0 when training
-            )
-            if attention_mask.size() != (bs, 1, seqlen, seqlen):
-                raise ValueError(
-                    f"Attention mask should be of size {(bs, 1, seqlen, seqlen)}, but is {attention_mask.size()}"
-                )
 
         output = torch.nn.functional.scaled_dot_product_attention(
             query=xq,
@@ -951,8 +917,6 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
     ):
         """
         Perform a forward pass through the TransformerBlock.
@@ -966,7 +930,7 @@ class TransformerBlock(nn.Module):
             torch.Tensor: Output tensor after applying attention and feedforward layers.
 
         """
-        h = x + self.attention(self.attention_norm(x), freqs_cis=freqs_cis, attention_mask=attention_mask, position_ids=position_ids)
+        h = x + self.attention(self.attention_norm(x), freqs_cis)
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
 
@@ -1028,8 +992,6 @@ class Transformer(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
     ):
         """
         Perform a forward pass through the Transformer model.
@@ -1050,11 +1012,13 @@ class Transformer(nn.Module):
         h = self.tok_embeddings(input_ids) if self.tok_embeddings else input_ids
 
         # Ensure rotary buffer is on the same device as activations (important under CP/FSDP)
-        if self.freqs_cis.device != h.device:
-            self.freqs_cis = self.freqs_cis.to(h.device)
+        # Do not convert DTensor to a regular Tensor; keep replicated DTensor under TP
+        # if not isinstance(self.freqs_cis, DTensor):
+        #     if self.freqs_cis.device != h.device:
+        #         self.freqs_cis = self.freqs_cis.to(h.device)
 
         for layer in self.layers.values():
-            h = layer(h, self.freqs_cis, attention_mask, position_ids)
+            h = layer(h, self.freqs_cis)
 
         h = self.norm(h) if self.norm else h
         output = self.output(h) if self.output else h
