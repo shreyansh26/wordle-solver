@@ -23,6 +23,7 @@ from torch.distributed.tensor.parallel import (
     PrepareModuleInput,
     SequenceParallel,
 )
+from torch.distributed._symmetric_memory import enable_symm_mem_for_group
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaAttention, LlamaMLP
 from model_llama import Transformer
 from utils.state_dict_utils import to_hf
@@ -600,6 +601,7 @@ if __name__ == "__main__":
     parser.add_argument("--async-dcp", dest="use_async_dcp", action="store_true", help="Enable async DCP checkpointing")
     parser.add_argument("--async-dcp-pinned", dest="use_pinned_writer", action="store_true", help="Use pinned-memory writer with async DCP")
     parser.add_argument("--tp-degree", type=int, default=1, help="Tensor parallel degree (1 disables TP)")
+    parser.add_argument("--async-tp", action="store_true", help="Enable Async TP")
     parser.add_argument("--cp-degree", type=int, default=1, help="Context parallel degree (1 disables CP)")
     parser.add_argument(
         "--cp-rotate",
@@ -671,6 +673,12 @@ if __name__ == "__main__":
         cp_mesh = None
         tp_enabled = False
         cp_enabled = False
+
+    if args.async_tp:
+        if not tp_degree > 1:
+            raise ValueError("--tp-degree must be > 1 when async-tp is enabled")
+        torch._inductor.config._micro_pipeline_tp = True
+        enable_symm_mem_for_group(tp_mesh.get_group().group_name)
 
     dp_rank = dp_mesh.get_local_rank()
     cp_rotate_method = str(args.cp_rotate)
@@ -801,7 +809,7 @@ if __name__ == "__main__":
         #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
 
     # Allow compilation under CP, but keep it disabled for TP
-    if compile:
+    if compile and not tp_enabled:
         torch._dynamo.config.capture_scalar_outputs = True
         # backend = "inductor"
         compile_model(model, fullgraph=False)
