@@ -650,7 +650,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_tp_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -661,7 +661,7 @@ if __name__ == "__main__":
     validation_batch_size = 1  # adjust as needed
     epochs = 5  # adjust as needed
     gradient_accumulation_steps = 4
-    lr = 7e-05 # 5e-06  # adjust as needed
+    lr = 5e-05 # 5e-06  # adjust as needed
     weight_decay = 0.01  # adjust as needed
     gradient_clipping = 1.0  # adjust as needed
     train_on_inputs = False  # whether to train on instruction tokens
