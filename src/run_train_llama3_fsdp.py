@@ -682,12 +682,6 @@ if __name__ == "__main__":
         tp_enabled = False
         cp_enabled = False
 
-    if args.async_tp:
-        if not tp_degree > 1:
-            raise ValueError("--tp-degree must be > 1 when async-tp is enabled")
-        torch._inductor.config._micro_pipeline_tp = True
-        enable_symm_mem_for_group(tp_mesh.get_group().group_name)
-
     dp_rank = dp_mesh.get_local_rank()
     cp_rotate_method = str(args.cp_rotate)
 
@@ -712,7 +706,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_tp_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_async_tp_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -796,6 +790,12 @@ if __name__ == "__main__":
                 device_mesh=tp_mesh,
                 parallelize_plan=layer_tp_plan,
             )
+        
+        if args.async_tp:
+            if not tp_degree > 1:
+                raise ValueError("--tp-degree must be > 1 when async-tp is enabled")
+            torch._inductor.config._micro_pipeline_tp = True
+            enable_symm_mem_for_group(tp_mesh.get_group().group_name)
 
         # Store mesh for hooks and register a pre-hook to convert kwargs to DTensor(Replicate)
         # model._tp_mesh = tp_mesh
