@@ -150,15 +150,23 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
     
     return model, tokenizer, config, model_args
 
-def compile_model(model, fullgraph=False):
-    # Compile only safe submodules (avoid attention/rotary complex ops under CP)
+# def compile_model(model, fullgraph=False):
+#     # Compile only safe submodules (avoid attention/rotary complex ops under CP)
+#     for layer_id, transformer_block in model.layers.named_children():
+#         if hasattr(transformer_block, "feed_forward"):
+#             transformer_block.feed_forward = torch.compile(
+#                 transformer_block.feed_forward, fullgraph=fullgraph
+#             )
+#     if hasattr(model, "output") and isinstance(model.output, torch.nn.Module):
+#         model.output = torch.compile(model.output, fullgraph=fullgraph)
+
+def compile_model(model, backend="inductor", fullgraph=False):
     for layer_id, transformer_block in model.layers.named_children():
-        if hasattr(transformer_block, "feed_forward"):
-            transformer_block.feed_forward = torch.compile(
-                transformer_block.feed_forward, fullgraph=fullgraph
-            )
-    if hasattr(model, "output") and isinstance(model.output, torch.nn.Module):
-        model.output = torch.compile(model.output, fullgraph=fullgraph)
+        transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=True)
+        model.layers.register_module(layer_id, transformer_block)
+
+    if local_rank == 0:
+        print("Compiling each TransformerBlock with torch.compile")
 
 def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False):
     fsdp_kwargs = {
@@ -704,7 +712,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_tp_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_tp_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -737,9 +745,6 @@ if __name__ == "__main__":
 
     model, tokenizer, hf_config, model_args = setup_model(model_name, max_length, use_flash_attn_api, use_flash_attn_sdpa, tp_enabled)
     num_params = sum([p.numel() for p in model.parameters()])
-
-    # Move model to device before applying TP and FSDP
-    # model = model.to("cpu")
 
     # Apply Tensor Parallel plan before compilation and FSDP wrapping
     if tp_enabled:
@@ -808,11 +813,10 @@ if __name__ == "__main__":
         #         setattr(attention_module, "_tp_mesh", tp_mesh)
         #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
 
-    # Allow compilation under CP, but keep it disabled for TP
-    if compile and not tp_enabled:
+    if compile:
         torch._dynamo.config.capture_scalar_outputs = True
-        # backend = "inductor"
-        compile_model(model, fullgraph=False)
+        backend = "inductor"
+        compile_model(model, backend=backend, fullgraph=False)
     
     apply_fsdp(model, dp_mesh=dp_mesh, tp_enabled=tp_enabled)
 
@@ -908,9 +912,11 @@ if __name__ == "__main__":
             },
         )
 
-    if gradient_checkpointing and not (cp_enabled or tp_enabled):
+    if gradient_checkpointing and not (cp_enabled):
         apply_activation_checkpointing(model, "full")
-    elif gradient_checkpointing and (cp_enabled or tp_enabled) and local_rank == 0:
+        if local_rank == 0:
+            print("Applying activation checkpointing")
+    elif gradient_checkpointing and (cp_enabled) and local_rank == 0:
         print("Skipping activation checkpointing under TP/CP to avoid interactions with sharded params and checkpointed graphs")
 
     loss_fn = cross_entropy_loss
@@ -1018,7 +1024,8 @@ if __name__ == "__main__":
 
             # clipping
             if clip_gradients:
-                if tp_enabled or cp_enabled:
+                if cp_enabled:
+                    # TODO: inspect later as this is for TP mainly?
                     grad_norm = clip_grad_norm_sharded(model, gradient_clipping, dp_mesh=dp_mesh, tp_mesh=tp_mesh if tp_enabled else None)
                 else:
                     grad_norm = clip_model_gradients(model, gradient_clipping)
