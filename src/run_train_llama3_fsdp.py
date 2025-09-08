@@ -13,9 +13,10 @@ from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateD
 from torch.distributed import checkpoint as dcp
 from torch.distributed.checkpoint import FileSystemWriter as StorageWriter
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper as ptd_checkpoint_wrapper
-from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed._tensor import Shard, Replicate
 from torch.distributed._tensor import DTensor, distribute_tensor
+import torch.distributed._functional_collectives as funcol
 from torch.distributed.tensor.parallel import (
     parallelize_module,
     ColwiseParallel,
@@ -41,6 +42,7 @@ from typing import Optional
 import json
 from contextlib import contextmanager, ExitStack
 import argparse
+from typing import Iterable
 try:
     # Python 3.9+
     from zoneinfo import ZoneInfo
@@ -86,6 +88,9 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
     labels = labels[:, 1:].contiguous()
 
     # Use SUM reduction and divide by valid tokens for true per-token average
+    # print("Pred: ", pred, "Local rank: ", local_rank)
+    # print("Labels: ", labels, "Local rank: ", local_rank)
+
     loss_sum = torch.nn.functional.cross_entropy(
         pred.reshape(-1, pred.size(-1)).float(),
         labels.reshape(-1),
@@ -100,8 +105,8 @@ def cross_entropy_loss(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
     if valid_tokens > 0:
         return loss_sum / valid_tokens
     else:
-        # Return 0 loss for completely empty segments (instead of NaN)
-        return torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+        # Return small loss for completely empty segments (instead of NaN)
+        return torch.tensor(0.01, device=pred.device, dtype=pred.dtype, requires_grad=True)
 
 def load_model(model_path, model_args, use_flash_attn_api: bool = False, use_flash_attn_sdpa: bool = False, tp_enabled: bool = False):
     with torch.device("meta"):
@@ -150,16 +155,6 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
     
     return model, tokenizer, config, model_args
 
-# def compile_model(model, fullgraph=False):
-#     # Compile only safe submodules (avoid attention/rotary complex ops under CP)
-#     for layer_id, transformer_block in model.layers.named_children():
-#         if hasattr(transformer_block, "feed_forward"):
-#             transformer_block.feed_forward = torch.compile(
-#                 transformer_block.feed_forward, fullgraph=fullgraph
-#             )
-#     if hasattr(model, "output") and isinstance(model.output, torch.nn.Module):
-#         model.output = torch.compile(model.output, fullgraph=fullgraph)
-
 def compile_model(model, backend="inductor", fullgraph=False):
     for layer_id, transformer_block in model.layers.named_children():
         transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=True)
@@ -168,20 +163,91 @@ def compile_model(model, backend="inductor", fullgraph=False):
     if local_rank == 0:
         print("Compiling each TransformerBlock with torch.compile")
 
-def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False):
+def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = False, cp_enabled: bool = False):
+    # For CP, avoid resharding after forward to prevent issues with sequence sharding
+    reshard_after_forward = not (tp_enabled or cp_enabled)
+    
     fsdp_kwargs = {
         "mp_policy": MixedPrecisionPolicy(
             param_dtype=torch.bfloat16,
-            reduce_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
         ),
-        "reshard_after_forward": False if tp_enabled else True,  # Always False for TP compatibility
+        "reshard_after_forward": reshard_after_forward,
     }
     if dp_mesh is not None:
         fsdp_kwargs["mesh"] = dp_mesh
 
+    if hasattr(model, 'tok_embeddings') and model.tok_embeddings is not None:
+        fully_shard(model.tok_embeddings, **fsdp_kwargs)
+    
+    # Apply to transformer layers
     for layer_id, transformer_block in model.layers.named_children():
         fully_shard(transformer_block, **fsdp_kwargs)
+    
+    # Apply to norm and output with optimized resharding
+    if hasattr(model, 'norm') and hasattr(model, 'output'):
+        if model.norm is not None and model.output is not None:
+            norm_output_kwargs = fsdp_kwargs.copy()
+            norm_output_kwargs["reshard_after_forward"] = False  # Optimization from TorchTitan
+            fully_shard([model.norm, model.output], **norm_output_kwargs)
+    
+    # Finally, shard the whole model
     fully_shard(model, **fsdp_kwargs)
+
+def apply_tp(model, tp_mesh: DeviceMesh, tp_degree: int = 1, async_tp: bool = False):
+    if local_rank == 0:
+        print("Applying Tensor Parallel parallelization plan...")
+    # Parallelize top-level modules
+    model = parallelize_module(
+        model,
+        tp_mesh,
+        {
+            "tok_embeddings": RowwiseParallel(
+                input_layouts=Replicate(),
+                output_layouts=Shard(1),
+            ),
+            "norm": SequenceParallel(),
+            "output": ColwiseParallel(
+                input_layouts=Shard(1),
+                output_layouts=Replicate(),
+                use_local_output=True,
+            ),
+        },
+    )
+
+    # Parallelize each transformer block
+    for layer_id, transformer_block in model.layers.named_children():
+        layer_tp_plan = {
+            "attention_norm": SequenceParallel(),
+            "attention": PrepareModuleInput(
+                input_layouts=(Shard(1), None),
+                desired_input_layouts=(Replicate(), None),
+            ),
+            "attention.wq": ColwiseParallel(),
+            "attention.wk": ColwiseParallel(),
+            "attention.wv": ColwiseParallel(),
+            "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
+            "ffn_norm": SequenceParallel(),
+            "feed_forward": PrepareModuleInput(
+                input_layouts=(Shard(1),),
+                desired_input_layouts=(Replicate(),),
+            ),
+            "feed_forward.w1": ColwiseParallel(),
+            "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
+            "feed_forward.w3": ColwiseParallel(),
+        }
+
+        parallelize_module(
+            module=transformer_block,
+            device_mesh=tp_mesh,
+            parallelize_plan=layer_tp_plan,
+        )
+    
+    if async_tp:
+        if tp_degree <= 1:
+            raise ValueError("tp_degree must be > 1 when async-tp is enabled")
+        torch._inductor.config._micro_pipeline_tp = True
+        enable_symm_mem_for_group(tp_mesh.get_group().group_name)
 
 def _apply_ac_to_transformer_block(
     module: nn.Module, mode: str, *, base_fqn: Optional[str] = None
@@ -424,19 +490,37 @@ def get_all_reduce_mean(tensor, group=None):
     tensor = tensor / denom
     return tensor
 
-def reduce_loss_and_count_across_dp_cp(loss_sum: torch.Tensor, token_count: torch.Tensor, dp_group, cp_group) -> tuple[torch.Tensor, torch.Tensor]:
+def dist_reduce_sum(tensor, mesh: DeviceMesh) -> float:
     """
-    All-reduce loss_sum and token_count across DP×CP to form global averages for metrics.
-    This does not affect the backward path; it is only for logging/eval correctness.
-    Expects scalar tensors on the current device.
+    Distributed sum reduction
+    Handles DTensor inputs properly and returns a float.
     """
-    if dp_group is not None:
-        torch.distributed.all_reduce(loss_sum, op=torch.distributed.ReduceOp.SUM, group=dp_group)
-        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=dp_group)
-    if cp_group is not None:
-        torch.distributed.all_reduce(loss_sum, op=torch.distributed.ReduceOp.SUM, group=cp_group)
-        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=cp_group)
-    return loss_sum, token_count
+    from torch.distributed._tensor import DTensor
+    import torch.distributed._functional_collectives as funcol
+    
+    # Handle DTensor inputs
+    if isinstance(tensor, DTensor):
+        tensor = tensor.full_tensor()
+    
+    assert tensor.numel() == 1, f"Expected scalar tensor, got tensor with {tensor.numel()} elements"
+    result = funcol.all_reduce(tensor, reduceOp="sum", group=mesh.get_group())
+    return result.item()
+
+def dist_reduce_mean(tensor, mesh: DeviceMesh) -> float:
+    """
+    Distributed mean reduction
+    Handles DTensor inputs properly and returns a float.
+    """
+    from torch.distributed._tensor import DTensor
+    import torch.distributed._functional_collectives as funcol
+    
+    # Handle DTensor inputs
+    if isinstance(tensor, DTensor):
+        tensor = tensor.full_tensor()
+    
+    assert tensor.numel() == 1, f"Expected scalar tensor, got tensor with {tensor.numel()} elements"
+    result = funcol.all_reduce(tensor, reduceOp="avg", group=mesh.get_group())
+    return result.item()
 
 def get_warmup_steps(num_training_steps, warmup_ratio=0.05):
     return math.ceil(num_training_steps * warmup_ratio)
@@ -493,6 +577,61 @@ def clip_grad_norm_sharded(model, max_grad_norm: float, dp_mesh: DeviceMesh | No
 
     return total_norm
 
+@torch.no_grad()
+def clip_grad_norm_(
+    parameters: torch.Tensor | Iterable[torch.Tensor],
+    max_norm: float,
+    norm_type: float = 2.0,
+    error_if_nonfinite: bool = False,
+    foreach: bool | None = None,
+) -> torch.Tensor:
+    """
+    Clip the gradient norm of an iterable of parameters.
+
+    Gradient norm clipping requires computing the gradient norm over the entire model.
+    `torch.nn.utils.clip_grad_norm_` only computes gradient norm along DP/FSDP/TP dimensions.
+    We need to manually reduce the gradient norm across PP stages.
+    See https://github.com/pytorch/torchtitan/issues/596 for details.
+
+    Args:
+        parameters: an iterable of Tensors or a single Tensor that will have gradients normalized
+        max_norm (float): max norm of the gradients
+        norm_type (float): type of the used p-norm. Can be ``'inf'`` for
+            infinity norm.
+        error_if_nonfinite (bool): if True, an error is thrown if the total
+            norm of the gradients from :attr:`parameters` is ``nan``,
+            ``inf``, or ``-inf``. Default: False (will switch to True in the future)
+        foreach (bool): use the faster foreach-based implementation.
+            If ``None``, use the foreach implementation for CUDA and CPU native tensors and silently
+            fall back to the slow implementation for other device types.
+            Default: ``None``
+
+    Returns:
+        Total norm of the parameter gradients (viewed as a single vector).
+
+    """
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    else:
+        # prevent generators from being exhausted
+        parameters = list(parameters)
+    grads = [p.grad for p in parameters if p.grad is not None]
+    total_norm = torch.nn.utils.get_total_norm(
+        grads, norm_type, error_if_nonfinite, foreach
+    )
+
+    # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
+    # We can simply reduce the DTensor to get the total norm in this tensor's process group
+    # and then convert it to a local tensor.
+    # NOTE: It has two purposes:
+    #       1. to make sure the total norm is computed correctly when PP is used (see below)
+    #       2. to return a reduced total_norm tensor whose .item() would return the correct value
+    if isinstance(total_norm, DTensor):
+        # If only using PP, total_norm will be a local tensor.
+        total_norm = total_norm.full_tensor()
+
+    torch.nn.utils.clip_grads_with_norm_(parameters, max_norm, total_norm, foreach)
+    return total_norm
 
 def get_scheduler(local_rank, scheduler_type, optimizer, max_steps):
     warmup_steps = get_warmup_steps(max_steps)
@@ -623,6 +762,7 @@ if __name__ == "__main__":
     # Checkpointing options (also configurable via CLI flags)
     use_async_dcp = bool(args.use_async_dcp)
     use_pinned_writer = bool(args.use_pinned_writer)
+    async_tp = bool(args.async_tp)
     if use_pinned_writer and not use_async_dcp:
         # Pinned writer requires async mode; promote to async
         use_async_dcp = True
@@ -648,41 +788,83 @@ if __name__ == "__main__":
         raise ValueError(f"WORLD_SIZE {world_size} must be divisible by tp-degree*cp-degree {tp_degree*cp_degree}")
 
     dp_degree = world_size // (tp_degree * cp_degree)
+    
+    # Validate dimensions
+    assert dp_degree >= 1, f"dp_degree must be >= 1, got {dp_degree}"
+    assert tp_degree >= 1, f"tp_degree must be >= 1, got {tp_degree}"
+    assert cp_degree >= 1, f"cp_degree must be >= 1, got {cp_degree}"
+    assert dp_degree * tp_degree * cp_degree == world_size, (
+        f"Invalid parallel dims: dp({dp_degree}) * tp({tp_degree}) * cp({cp_degree}) != WORLD_SIZE({world_size})"
+    )
 
-    if cp_degree > 1 and tp_degree > 1:
-        mesh_3d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, tp_degree, cp_degree)
-        world_mesh = DeviceMesh("cuda", mesh_3d, mesh_dim_names=("dp", "tp", "cp"))
-        dp_mesh = world_mesh["dp"]
-        tp_mesh = world_mesh["tp"]
-        cp_mesh = world_mesh["cp"]
-        tp_enabled = True
-        cp_enabled = True
-    elif cp_degree == 1 and tp_degree > 1:
-        mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, tp_degree)
-        world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "tp"))
-        dp_mesh = world_mesh["dp"]
-        tp_mesh = world_mesh["tp"]
-        cp_mesh = None
-        tp_enabled = True
-        cp_enabled = False
-    elif cp_degree > 1 and tp_degree == 1:
-        mesh_2d = torch.arange(world_size, device=torch.device("cpu")).view(dp_degree, cp_degree)
-        world_mesh = DeviceMesh("cuda", mesh_2d, mesh_dim_names=("dp", "cp"))
-        dp_mesh = world_mesh["dp"]
-        cp_mesh = world_mesh["cp"]
-        tp_mesh = None
-        tp_enabled = False
-        cp_enabled = True
+    # Build structured mesh
+    def build_device_mesh():
+        dims = []
+        names = []
+        
+        # Add dimensions that are > 1
+        for d, name in zip([dp_degree, cp_degree, tp_degree], ["dp", "cp", "tp"]):
+            if d > 1:
+                dims.append(d)
+                names.append(name)
+        
+        if local_rank == 0:
+            print(f"Building {len(dims)}-D device mesh with {names}, {dims}")
+        
+        mesh = init_device_mesh("cuda", dims, mesh_dim_names=names)
+        
+        # Create submeshes using flattening
+        dp_mesh_dim_names = []
+        dp_cp_mesh_dim_names = []
+        
+        # Add dp dimension if enabled
+        if dp_degree > 1:
+            dp_mesh_dim_names.append("dp")
+            dp_cp_mesh_dim_names.append("dp")
+        
+        # Add cp dimension if enabled  
+        if cp_degree > 1:
+            dp_cp_mesh_dim_names.append("cp")
+        
+        # Create flattened submeshes
+        if dp_mesh_dim_names:
+            mesh[tuple(dp_mesh_dim_names)]._flatten(mesh_dim_name="dp_flat")
+        if dp_cp_mesh_dim_names:
+            mesh[tuple(dp_cp_mesh_dim_names)]._flatten(mesh_dim_name="dp_cp")
+        
+        return mesh
+
+    world_mesh = build_device_mesh()
+    
+    # Extract submeshes
+    tp_enabled = tp_degree > 1
+    cp_enabled = cp_degree > 1
+    
+    # Get submeshes using flattened names when possible
+    if dp_degree > 1:
+        dp_mesh = world_mesh["dp_flat"]
     else:
-        mesh_1d = torch.arange(world_size, device=torch.device("cpu"))
-        world_mesh = DeviceMesh("cuda", mesh_1d, mesh_dim_names=("dp",))
-        dp_mesh = world_mesh
-        tp_mesh = None
-        cp_mesh = None
-        tp_enabled = False
-        cp_enabled = False
+        dp_mesh = None
+        
+    if cp_enabled and dp_degree > 1:
+        dp_cp_mesh = world_mesh["dp_cp"]
+    elif cp_enabled:
+        dp_cp_mesh = world_mesh["cp"]
+    elif dp_degree > 1:
+        dp_cp_mesh = world_mesh["dp_flat"] 
+    else:
+        dp_cp_mesh = None
+        
+    tp_mesh = world_mesh["tp"] if tp_enabled else None
+    cp_mesh = world_mesh["cp"] if cp_enabled else None
 
-    dp_rank = dp_mesh.get_local_rank()
+    # Get dp rank for data loading  
+    dp_rank = dp_mesh.get_local_rank() if dp_mesh is not None else 0
+    
+    # Calculate enabled flags
+    dp_enabled = dp_degree > 1
+    dp_cp_enabled = dp_enabled or cp_enabled
+    
     cp_rotate_method = str(args.cp_rotate)
 
     if tp_enabled and local_rank == 0:
@@ -697,7 +879,7 @@ if __name__ == "__main__":
         # Avoid compiled autograd with FSDP2 + TP/CP to prevent param freeing conflicts
         train_context = get_train_context(enable_compiled_autograd=False)
     else:
-        train_context = get_train_context(enable_compiled_autograd=True)
+        train_context = get_train_context(enable_compiled_autograd=False)
 
     model_name = "meta-llama/Llama-3.2-3B-Instruct"
     scheduler_type = "cosine"
@@ -742,83 +924,14 @@ if __name__ == "__main__":
 
     # Apply Tensor Parallel plan before compilation and FSDP wrapping
     if tp_enabled:
-        if local_rank == 0:
-            print("Applying Tensor Parallel parallelization plan...")
-        # Parallelize top-level modules
-        model = parallelize_module(
-            model,
-            tp_mesh,
-            {
-                "tok_embeddings": RowwiseParallel(
-                    input_layouts=Replicate(),
-                    output_layouts=Shard(1),
-                ),
-                "norm": SequenceParallel(),
-                "output": ColwiseParallel(
-                    input_layouts=Shard(1),
-                    output_layouts=Replicate(),
-                    # Return local Tensor for logits so downstream loss works without DTensor support
-                    use_local_output=True,
-                ),
-            },
-        )
-
-        # Parallelize each transformer block
-        for layer_id, transformer_block in model.layers.named_children():
-            layer_tp_plan = {
-                "attention_norm": SequenceParallel(),
-                "attention": PrepareModuleInput(
-                    input_layouts=(Shard(1), None),
-                    desired_input_layouts=(Replicate(), None),
-                ),
-                "attention.wq": ColwiseParallel(),
-                "attention.wk": ColwiseParallel(),
-                "attention.wv": ColwiseParallel(),
-                "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
-                "ffn_norm": SequenceParallel(),
-                "feed_forward": PrepareModuleInput(
-                    input_layouts=(Shard(1),),
-                    desired_input_layouts=(Replicate(),),
-                ),
-                "feed_forward.w1": ColwiseParallel(),
-                "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
-                "feed_forward.w3": ColwiseParallel(),
-            }
-
-            parallelize_module(
-                module=transformer_block,
-                device_mesh=tp_mesh,
-                parallelize_plan=layer_tp_plan,
-            )
-        
-        if args.async_tp:
-            if not tp_degree > 1:
-                raise ValueError("--tp-degree must be > 1 when async-tp is enabled")
-            torch._inductor.config._micro_pipeline_tp = True
-            enable_symm_mem_for_group(tp_mesh.get_group().group_name)
-
-        # Store mesh for hooks and register a pre-hook to convert kwargs to DTensor(Replicate)
-        # model._tp_mesh = tp_mesh
-
-        # def _tp_kwargs_to_dtensor_hook(module, args, kwargs):
-        #     # Avoid converting kwargs here to prevent introducing DTensors where
-        #     # downstream ops expect regular Tensors (e.g., attention mask utils).
-        #     # Rotary handling will reconcile types inside apply_rotary_emb.
-        #     return args, kwargs
-
-        # # Attach mesh to each attention module for clarity and register hook with kwargs support
-        # for _, transformer_block in model.layers.named_children():
-        #     attention_module = getattr(transformer_block, "attention", None)
-        #     if attention_module is not None:
-        #         setattr(attention_module, "_tp_mesh", tp_mesh)
-        #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
+        apply_tp(model, tp_mesh=tp_mesh, tp_degree=tp_degree, async_tp=async_tp)
 
     if compile:
         torch._dynamo.config.capture_scalar_outputs = True
         backend = "inductor"
         compile_model(model, backend=backend, fullgraph=False)
     
-    apply_fsdp(model, dp_mesh=dp_mesh, tp_enabled=tp_enabled)
+    apply_fsdp(model, dp_mesh=dp_cp_mesh, tp_enabled=tp_enabled, cp_enabled=cp_enabled)
 
     # if tp_enabled:
     #     # Move freqs_cis to device and distribute after FSDP
@@ -923,6 +1036,18 @@ if __name__ == "__main__":
     loss_fn = compile_loss(loss_fn, backend="inductor")
 
     model.train()
+    
+    # Verify all parameters require gradients
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            if local_rank == 0:
+                print(f"WARNING: Parameter {name} does not require gradients")
+    
+    if local_rank == 0:
+        param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Trainable parameters: {param_count:,}")
+        print(f"Model device: {next(model.parameters()).device}")
+        print(f"Model dtype: {next(model.parameters()).dtype}")
     dist.barrier()
     train_iterator = iter(train_loader)
     for epoch in range(0, epochs):
@@ -958,18 +1083,14 @@ if __name__ == "__main__":
                 # Optional CP context
                 optional_context_parallel_ctx = None
                 if cp_enabled:
-                    # Ensure freqs_cis is on the compute device and pass the SAME buffer
-                    # reference used by the model so CP can manage its sequence sharding/rotation.
-                    if model.freqs_cis.device != device:
-                        model.freqs_cis = model.freqs_cis.to(device)
                     cp_buffers = [input_ids, labels, model.freqs_cis]
                     cp_seq_dims = [1, 1, 0]
-                    if attention_mask is not None:
-                        cp_buffers.append(attention_mask)
-                        cp_seq_dims.append(1)
-                    if position_ids is not None:
-                        cp_buffers.append(position_ids)
-                        cp_seq_dims.append(1)
+                    # if attention_mask is not None:
+                    #     cp_buffers.append(attention_mask)
+                    #     cp_seq_dims.append(1)
+                    # if position_ids is not None:
+                    #     cp_buffers.append(position_ids)
+                    #     cp_seq_dims.append(1)
                     optional_context_parallel_ctx = create_context_parallel_ctx(
                         cp_mesh=cp_mesh,
                         cp_buffers=cp_buffers,
@@ -980,26 +1101,26 @@ if __name__ == "__main__":
                 # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
                     logits = model(input_ids)
-                # Compute loss directly
-                loss = loss_fn(logits, labels)
-                # accumulate token-weighted loss for DP×CP logging
-                step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
-                
-                # Handle case where CP shard has no valid tokens (all masked)
-                if step_tokens == 0:
-                    # Create zero loss connected to model computation graph
-                    # This ensures all CP ranks have consistent gradient flow
-                    loss = (logits * 0.0).sum()  # Connected to model but evaluates to 0
-                    contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
-                else:
-                    contrib = loss.detach() * step_tokens
-                
-                training_loss_sum += contrib
-                training_token_count += step_tokens
-                loss = loss / gradient_accumulation_steps
+                    # Compute loss directly
+                    loss = loss_fn(logits, labels)
+                    # accumulate token-weighted loss for DP×CP logging
+                    step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+                    
+                    # Handle case where CP shard has no valid tokens (all masked)
+                    if step_tokens == 0:
+                        # Create zero loss connected to model computation graph
+                        # This ensures all CP ranks have consistent gradient flow
+                        loss = (logits * 0.0).sum()  # Connected to model but evaluates to 0
+                        contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+                    else:
+                        contrib = loss.detach() * step_tokens
+                    
+                    training_loss_sum += contrib
+                    training_token_count += step_tokens
+                    loss = loss / gradient_accumulation_steps
 
-                # backward inside the same context
-                loss.backward()
+                    # backward inside the same context
+                    loss.backward()
                 
                 # Clean up to reduce memory fragmentation and avoid storage issues
                 del loss, logits
@@ -1015,20 +1136,35 @@ if __name__ == "__main__":
                     break
 
             # form DP×CP-reduced training metric (does not affect backward path)
-            dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
-            cp_group = cp_mesh.get_group() if cp_enabled else None
-            training_loss_sum, training_token_count = reduce_loss_and_count_across_dp_cp(
-                training_loss_sum, training_token_count, dp_group, cp_group
-            )
-            acc_loss_metric = (training_loss_sum / training_token_count.clamp_min(1)).item()
+            if dp_cp_enabled:
+                training_loss_sum, training_token_count = dist_reduce_sum(
+                    training_loss_sum, dp_cp_mesh
+                ), dist_reduce_sum(
+                    training_token_count, dp_cp_mesh
+                )
+                # if local_rank == 0:
+                #     print(f"Training Loss Sum: {training_loss_sum}")
+                #     print(f"Training Token Count: {training_token_count}")
+                acc_loss_metric = (training_loss_sum / training_token_count)
+            else:
+                acc_loss_metric = (training_loss_sum / training_token_count).item()
 
-            # clipping
+            # clipping (global across dp_cp and tp meshes, like TorchTitan)
             if clip_gradients:
-                if cp_enabled:
-                    # TODO: inspect later as this is for TP mainly?
-                    grad_norm = clip_grad_norm_sharded(model, gradient_clipping, dp_mesh=dp_mesh, tp_mesh=tp_mesh if tp_enabled else None)
-                else:
-                    grad_norm = clip_model_gradients(model, gradient_clipping)
+                grad_norm = clip_grad_norm_(model.parameters(), max_norm=gradient_clipping, foreach=True)
+                # grad_norm = clip_grad_norm_sharded(
+                #     model,
+                #     max_grad_norm=gradient_clipping,
+                #     dp_mesh=dp_cp_mesh,
+                #     tp_mesh=tp_mesh,
+                # )
+                # Check for NaN gradients
+                # if torch.isnan(torch.tensor(grad_norm)) or torch.isinf(torch.tensor(grad_norm)):
+                #     if local_rank == 0:
+                #         print(f"WARNING: NaN/Inf gradient norm detected: {grad_norm}. Skipping optimizer step.")
+                #     # Skip optimizer step on NaN gradients
+                #     optimizer.zero_grad(set_to_none=True)
+                #     continue
 
             # weight update
             optimizer.step()
@@ -1059,17 +1195,14 @@ if __name__ == "__main__":
                     position_ids = batch["position_ids"].to(device) if "position_ids" in batch else None
                     optional_context_parallel_ctx = None
                     if cp_enabled:
-                        # Ensure freqs_cis is on device and pass the actual buffer used by the model
-                        if model.freqs_cis.device != device:
-                            model.freqs_cis = model.freqs_cis.to(device)
                         cp_buffers = [input_ids, labels, model.freqs_cis]
                         cp_seq_dims = [1, 1, 0]
-                        if attention_mask is not None:
-                            cp_buffers.append(attention_mask)
-                            cp_seq_dims.append(1)
-                        if position_ids is not None:
-                            cp_buffers.append(position_ids)
-                            cp_seq_dims.append(1)
+                        # if attention_mask is not None:
+                        #     cp_buffers.append(attention_mask)
+                        #     cp_seq_dims.append(1)
+                        # if position_ids is not None:
+                        #     cp_buffers.append(position_ids)
+                        #     cp_seq_dims.append(1)
                         optional_context_parallel_ctx = create_context_parallel_ctx(
                             cp_mesh=cp_mesh,
                             cp_buffers=cp_buffers,
@@ -1093,12 +1226,15 @@ if __name__ == "__main__":
                     validation_loss_sum += contrib
                     validation_token_count += step_tokens
                 # Reduce metrics across DP×CP
-                dp_group = dp_mesh.get_group() if (cp_enabled or tp_enabled) else None
-                cp_group = cp_mesh.get_group() if cp_enabled else None
-                validation_loss_sum, validation_token_count = reduce_loss_and_count_across_dp_cp(
-                    validation_loss_sum, validation_token_count, dp_group, cp_group
-                )
-                val_loss = (validation_loss_sum / validation_token_count.clamp_min(1)).item()
+                if dp_cp_enabled:
+                    validation_loss_sum, validation_token_count = dist_reduce_sum(
+                        validation_loss_sum, dp_cp_mesh
+                    ), dist_reduce_sum(
+                        validation_token_count, dp_cp_mesh
+                    )
+                    val_loss = (validation_loss_sum / validation_token_count)
+                else:
+                    val_loss = (validation_loss_sum / validation_token_count).item()
                 if local_rank == 0:
                     print(f"Validation Loss {val_loss:.6f}")
                     wandb.log({"val_loss": val_loss})

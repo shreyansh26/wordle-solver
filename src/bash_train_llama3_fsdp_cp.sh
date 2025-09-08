@@ -1,1 +1,2 @@
+set -x
 torchrun --nnodes=1 --nproc-per-node=4 --master_port 29501 run_train_llama3_fsdp.py --async-dcp --cp-degree 2 --cp-rotate allgather
