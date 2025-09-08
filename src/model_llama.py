@@ -72,9 +72,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Ten
     ndim = x.ndim
     assert ndim > 1
     seqlen = x.shape[1]
-    # Slice to sequence length and materialize a private, detached copy to avoid
-    # autograd versioning issues if the original buffer is mutated by CP.
-    freqs_cis = freqs_cis[0:seqlen].detach().clone()
+    freqs_cis = freqs_cis[0:seqlen]
     assert freqs_cis.shape == (seqlen, x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
@@ -103,9 +101,6 @@ def apply_rotary_emb(
     """
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    # If inputs are DTensors (under TP), ensure freqs_cis is also a DTensor (Replicate)
-    # if isinstance(xq, DTensor) and not isinstance(freqs_cis, DTensor):
-    #     freqs_cis = distribute_tensor(freqs_cis.to(xq.device), xq.device_mesh, [Replicate()])
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
