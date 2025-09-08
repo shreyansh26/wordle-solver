@@ -183,6 +183,61 @@ def apply_fsdp(model, dp_mesh: DeviceMesh | None = None, tp_enabled: bool = Fals
         fully_shard(transformer_block, **fsdp_kwargs)
     fully_shard(model, **fsdp_kwargs)
 
+def apply_tp(model, tp_mesh: DeviceMesh, tp_degree: int = 1, async_tp: bool = False):
+    if local_rank == 0:
+        print("Applying Tensor Parallel parallelization plan...")
+    # Parallelize top-level modules
+    model = parallelize_module(
+        model,
+        tp_mesh,
+        {
+            "tok_embeddings": RowwiseParallel(
+                input_layouts=Replicate(),
+                output_layouts=Shard(1),
+            ),
+            "norm": SequenceParallel(),
+            "output": ColwiseParallel(
+                input_layouts=Shard(1),
+                output_layouts=Replicate(),
+                use_local_output=True,
+            ),
+        },
+    )
+
+    # Parallelize each transformer block
+    for layer_id, transformer_block in model.layers.named_children():
+        layer_tp_plan = {
+            "attention_norm": SequenceParallel(),
+            "attention": PrepareModuleInput(
+                input_layouts=(Shard(1), None),
+                desired_input_layouts=(Replicate(), None),
+            ),
+            "attention.wq": ColwiseParallel(),
+            "attention.wk": ColwiseParallel(),
+            "attention.wv": ColwiseParallel(),
+            "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
+            "ffn_norm": SequenceParallel(),
+            "feed_forward": PrepareModuleInput(
+                input_layouts=(Shard(1),),
+                desired_input_layouts=(Replicate(),),
+            ),
+            "feed_forward.w1": ColwiseParallel(),
+            "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
+            "feed_forward.w3": ColwiseParallel(),
+        }
+
+        parallelize_module(
+            module=transformer_block,
+            device_mesh=tp_mesh,
+            parallelize_plan=layer_tp_plan,
+        )
+    
+    if async_tp:
+        if tp_degree <= 1:
+            raise ValueError("tp_degree must be > 1 when async-tp is enabled")
+        torch._inductor.config._micro_pipeline_tp = True
+        enable_symm_mem_for_group(tp_mesh.get_group().group_name)
+
 def _apply_ac_to_transformer_block(
     module: nn.Module, mode: str, *, base_fqn: Optional[str] = None
 ):
@@ -623,6 +678,7 @@ if __name__ == "__main__":
     # Checkpointing options (also configurable via CLI flags)
     use_async_dcp = bool(args.use_async_dcp)
     use_pinned_writer = bool(args.use_pinned_writer)
+    async_tp = bool(args.async_tp)
     if use_pinned_writer and not use_async_dcp:
         # Pinned writer requires async mode; promote to async
         use_async_dcp = True
@@ -742,76 +798,7 @@ if __name__ == "__main__":
 
     # Apply Tensor Parallel plan before compilation and FSDP wrapping
     if tp_enabled:
-        if local_rank == 0:
-            print("Applying Tensor Parallel parallelization plan...")
-        # Parallelize top-level modules
-        model = parallelize_module(
-            model,
-            tp_mesh,
-            {
-                "tok_embeddings": RowwiseParallel(
-                    input_layouts=Replicate(),
-                    output_layouts=Shard(1),
-                ),
-                "norm": SequenceParallel(),
-                "output": ColwiseParallel(
-                    input_layouts=Shard(1),
-                    output_layouts=Replicate(),
-                    # Return local Tensor for logits so downstream loss works without DTensor support
-                    use_local_output=True,
-                ),
-            },
-        )
-
-        # Parallelize each transformer block
-        for layer_id, transformer_block in model.layers.named_children():
-            layer_tp_plan = {
-                "attention_norm": SequenceParallel(),
-                "attention": PrepareModuleInput(
-                    input_layouts=(Shard(1), None),
-                    desired_input_layouts=(Replicate(), None),
-                ),
-                "attention.wq": ColwiseParallel(),
-                "attention.wk": ColwiseParallel(),
-                "attention.wv": ColwiseParallel(),
-                "attention.wo": RowwiseParallel(output_layouts=Shard(1)),
-                "ffn_norm": SequenceParallel(),
-                "feed_forward": PrepareModuleInput(
-                    input_layouts=(Shard(1),),
-                    desired_input_layouts=(Replicate(),),
-                ),
-                "feed_forward.w1": ColwiseParallel(),
-                "feed_forward.w2": RowwiseParallel(output_layouts=Shard(1)),
-                "feed_forward.w3": ColwiseParallel(),
-            }
-
-            parallelize_module(
-                module=transformer_block,
-                device_mesh=tp_mesh,
-                parallelize_plan=layer_tp_plan,
-            )
-        
-        if args.async_tp:
-            if not tp_degree > 1:
-                raise ValueError("--tp-degree must be > 1 when async-tp is enabled")
-            torch._inductor.config._micro_pipeline_tp = True
-            enable_symm_mem_for_group(tp_mesh.get_group().group_name)
-
-        # Store mesh for hooks and register a pre-hook to convert kwargs to DTensor(Replicate)
-        # model._tp_mesh = tp_mesh
-
-        # def _tp_kwargs_to_dtensor_hook(module, args, kwargs):
-        #     # Avoid converting kwargs here to prevent introducing DTensors where
-        #     # downstream ops expect regular Tensors (e.g., attention mask utils).
-        #     # Rotary handling will reconcile types inside apply_rotary_emb.
-        #     return args, kwargs
-
-        # # Attach mesh to each attention module for clarity and register hook with kwargs support
-        # for _, transformer_block in model.layers.named_children():
-        #     attention_module = getattr(transformer_block, "attention", None)
-        #     if attention_module is not None:
-        #         setattr(attention_module, "_tp_mesh", tp_mesh)
-        #         attention_module.register_forward_pre_hook(_tp_kwargs_to_dtensor_hook, with_kwargs=True)
+        apply_tp(model, tp_mesh=tp_mesh, tp_degree=tp_degree, async_tp=async_tp)
 
     if compile:
         torch._dynamo.config.capture_scalar_outputs = True
