@@ -888,7 +888,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_async_tp_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_cp_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -905,7 +905,7 @@ if __name__ == "__main__":
     train_on_inputs = False  # whether to train on instruction tokens
     packing = None # None, "ffd"
     compile = True
-    use_flash_attn_api = False  # whether to use Flash Attention instead of SDPA
+    use_flash_attn_api = False  # whether to use Flash Attention API module
     use_flash_attn_sdpa = True  # whether to use Flash Attention backend from SDPA
 
     if local_rank == 0:
@@ -931,6 +931,8 @@ if __name__ == "__main__":
         backend = "inductor"
         compile_model(model, backend=backend, fullgraph=False)
     
+    # Use the DP×CP flattened mesh for FSDP (TorchTitan-style dp_shard_cp),
+    # so parameters are sharded across both dp_shard and cp dimensions.
     apply_fsdp(model, dp_mesh=dp_cp_mesh, tp_enabled=tp_enabled, cp_enabled=cp_enabled)
 
     # if tp_enabled:
@@ -1159,12 +1161,12 @@ if __name__ == "__main__":
                 #     tp_mesh=tp_mesh,
                 # )
                 # Check for NaN gradients
-                # if torch.isnan(torch.tensor(grad_norm)) or torch.isinf(torch.tensor(grad_norm)):
-                #     if local_rank == 0:
-                #         print(f"WARNING: NaN/Inf gradient norm detected: {grad_norm}. Skipping optimizer step.")
-                #     # Skip optimizer step on NaN gradients
-                #     optimizer.zero_grad(set_to_none=True)
-                #     continue
+                if torch.isnan(torch.tensor(grad_norm)) or torch.isinf(torch.tensor(grad_norm)):
+                    if local_rank == 0:
+                        print(f"WARNING: NaN/Inf gradient norm detected: {grad_norm}. Skipping optimizer step.")
+                    # Skip optimizer step on NaN gradients
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
 
             # weight update
             optimizer.step()

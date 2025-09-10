@@ -13,7 +13,7 @@ DATASET_DIR = "../data/sft/moonshotai_Kimi-K2-Instruct"
 # MODEL_NAME = "Qwen/Qwen3-4B"
 # MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/exp_2025-08-02T18:35:41_qwen3_4b_fsdp_packing=ffd_flash_attn_fsdp2_torch_compile_dcp_kimi_k2/epoch_5/step_final"
 # MODEL_NAME = "/mnt/ssd2/shreyansh/models/qwen3/grpo_vllm_rl_v7/checkpoint-686"
-MODEL_NAME = "/mnt/ssd2/shreyansh/models/llama32/exp_2025-09-07T09:22:50_llama32_3b_flash_attn_fsdp2_tp_torch_compile_dcp_deepseek_r1_sft/epoch_5/step_final"
+MODEL_NAME = "/mnt/ssd2/shreyansh/models/llama32/exp_2025-09-09T00:14:29_llama32_3b_flash_attn_fsdp2_cp_torch_compile_dcp_deepseek_r1_sft/epoch_5/step_final"
 
 logger = get_logger(f"inference_{MODEL_NAME.replace('/', '_')}")
 
