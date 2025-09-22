@@ -35,7 +35,7 @@ The code is organized to:
 ## Requirements
 
 - Python 3.11 or 3.12
-- CUDA 12.x GPU recommended (training Qwen3-4B with FSDP + Flash-Attn2)
+- CUDA 12.x GPU recommended (training Qwen3-4B with FSDP2 + Flash-Attn2)
 
 Core Python packages:
 
@@ -133,7 +133,7 @@ The SFT JSONL uses fields `{instruction, output}` where `instruction` is the cha
 
 ---
 
-## SFT training (Qwen3-4B, FSDP + Flash-Attn2)
+## SFT training (Qwen3-4B, FSDP2 + Flash-Attn2)
 
 Entrypoint: `src/run_train_qwen3_fsdp.py`
 
@@ -236,3 +236,25 @@ python run_inference.py
 You can compare summary CSVs with `src/utils/compare_performance.py`
 
 ---
+---
+
+## Additional experiments:
+
+- Incorporating 2D Parallelism -
+  - FSDP2 + TP (Tensor Parallelism)
+  - FSDP2 + CP (Context Parallelism)
+- torch.compile compatible
+
+Refer the training file - `src/run_train_llama3_fsdp.py`
+Scripts to run the training:
+
+```bash
+# FSDP2 + TP (Tensor Parallelism)
+cd src
+CUDA_VISIBLE_DEVICES=0,1,2,3, ./bash run_train_llama3_fsdp_tp.sh
+```
+
+```bash
+# FSDP2 + CP (Context Parallelism)
+CUDA_VISIBLE_DEVICES=0,1,2,3, ./bash run_train_llama3_fsdp_cp.sh
+```

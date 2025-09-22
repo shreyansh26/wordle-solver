@@ -157,7 +157,7 @@ def setup_model(model_name, max_length, use_flash_attn_api: bool = False, use_fl
 
 def compile_model(model, backend="inductor", fullgraph=False):
     for layer_id, transformer_block in model.layers.named_children():
-        transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=True)
+        transformer_block = torch.compile(transformer_block, backend=backend, fullgraph=fullgraph)
         model.layers.register_module(layer_id, transformer_block)
 
     if local_rank == 0:
@@ -489,6 +489,20 @@ def get_all_reduce_mean(tensor, group=None):
         denom = torch.distributed.get_world_size()
     tensor = tensor / denom
     return tensor
+
+def cross_entropy_loss_sum(pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Next-token cross-entropy *sum* (no divide)."""
+    if pred.dim() != 3 or labels.dim() != 2:
+        raise ValueError("Expected pred shape [batch, seq_len, vocab] and labels [batch, seq_len]")
+    # shift for next-token prediction
+    pred = pred[:, :-1, :].contiguous()
+    labels = labels[:, 1:].contiguous()
+    return torch.nn.functional.cross_entropy(
+        pred.reshape(-1, pred.size(-1)).float(),
+        labels.reshape(-1),
+        ignore_index=-100,
+        reduction="sum",
+    )
 
 def dist_reduce_sum(tensor, mesh: DeviceMesh) -> float:
     """
@@ -888,7 +902,7 @@ if __name__ == "__main__":
     transformers.set_seed(seed)
 
     date_of_run = current_timestamp_ist()
-    notes = "llama32_3b_flash_attn_fsdp2_cp_torch_compile_dcp_deepseek_r1_sft"
+    notes = "llama32_3b_flash_attn_fsdp2_torch_compile_dcp_deepseek_r1_sft"
     run_id = "exp_" + date_of_run + "_" + notes
     output_dir = f"/mnt/ssd2/shreyansh/models/llama32/{run_id}"
     max_length = 16384 # 12288  # adjust as needed
@@ -1034,8 +1048,10 @@ if __name__ == "__main__":
     elif gradient_checkpointing and (cp_enabled) and local_rank == 0:
         print("Skipping activation checkpointing under TP/CP to avoid interactions with sharded params and checkpointed graphs")
 
-    loss_fn = cross_entropy_loss
-    loss_fn = compile_loss(loss_fn, backend="inductor")
+    # loss_fn = cross_entropy_loss
+    # loss_fn = compile_loss(loss_fn, backend="inductor")
+    loss_fn_mean = compile_loss(cross_entropy_loss, backend="inductor")       # for non‑CP and eval
+    loss_fn_sum  = compile_loss(cross_entropy_loss_sum, backend="inductor")   # for CP train path
 
     model.train()
     
@@ -1103,18 +1119,28 @@ if __name__ == "__main__":
                 # forward under train_context (with optional CP)
                 with train_context(optional_context_parallel_ctx):
                     logits = model(input_ids)
-                    # Compute loss directly
-                    loss = loss_fn(logits, labels)
-                    # accumulate token-weighted loss for DP×CP logging
-                    step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
-                    
-                    # Handle case where CP shard has no valid tokens (all masked)
-                    if step_tokens == 0:
-                        # Create zero loss connected to model computation graph
-                        # This ensures all CP ranks have consistent gradient flow
-                        loss = (logits * 0.0).sum()  # Connected to model but evaluates to 0
-                        contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+                    if cp_enabled:
+                        # 1) local numerator (sum of per‑token CE on this shard)
+                        loss_sum = loss_fn_sum(logits, labels)
+
+                        # 2) local denominator (valid tokens on this shard)
+                        step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+
+                        # 3) global denominator over the *CP* mesh only
+                        # NOTE: returns a Python float; safe to divide a Tensor by it
+                        global_tokens = dist_reduce_sum(step_tokens, cp_mesh)
+
+                        # 4) handle empty initial batch cleanly (no NaN)
+                        if global_tokens == 0.0:
+                            loss = (logits * 0.0).sum()  # backprop zero
+                            contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+                        else:
+                            loss = loss_sum / float(global_tokens)
+                            contrib = loss.detach() * step_tokens
                     else:
+                        # Non‑CP path unchanged: your existing mean loss
+                        loss = loss_fn_mean(logits, labels)
+                        step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
                         contrib = loss.detach() * step_tokens
                     
                     training_loss_sum += contrib
@@ -1161,10 +1187,11 @@ if __name__ == "__main__":
                 #     tp_mesh=tp_mesh,
                 # )
                 # Check for NaN gradients
-                if torch.isnan(torch.tensor(grad_norm)) or torch.isinf(torch.tensor(grad_norm)):
+                if isinstance(grad_norm, torch.Tensor):
+                    grad_norm = float(grad_norm.item())
+                if not math.isfinite(grad_norm):
                     if local_rank == 0:
                         print(f"WARNING: NaN/Inf gradient norm detected: {grad_norm}. Skipping optimizer step.")
-                    # Skip optimizer step on NaN gradients
                     optimizer.zero_grad(set_to_none=True)
                     continue
 
@@ -1216,14 +1243,21 @@ if __name__ == "__main__":
                     with torch.no_grad():
                         with train_context(optional_context_parallel_ctx):
                             logits = model(input_ids)
-                    loss_val = loss_fn(logits, labels).float()
-                    step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
-                    
-                    # Handle empty CP shards in validation
-                    if step_tokens == 0:
-                        contrib = torch.tensor(0.0, device=device, dtype=torch.float32)
+
+                    if cp_enabled:
+                        loss_sum = loss_fn_sum(logits, labels)
+                        step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+                        global_tokens = dist_reduce_sum(step_tokens, cp_mesh)
+                        if global_tokens == 0.0:
+                            loss_val = (logits * 0.0).sum()
+                            contrib = torch.tensor(0.0, device=device, dtype=torch.float32) 
+                        else:
+                            loss_val = loss_sum / float(global_tokens)
+                            contrib = loss_val.detach() * step_tokens
                     else:
-                        contrib = loss_val.detach() * step_tokens
+                        loss = loss_fn_mean(logits, labels)
+                        step_tokens = (labels[:, 1:] != -100).sum().to(device=device, dtype=torch.float32)
+                        contrib = loss.detach() * step_tokens
                     
                     validation_loss_sum += contrib
                     validation_token_count += step_tokens
