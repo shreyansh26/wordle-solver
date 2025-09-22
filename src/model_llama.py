@@ -52,7 +52,7 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Te
     return freqs_cis
 
 
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+def reshape_for_broadcast_old(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """
     Reshape frequency tensor for broadcasting it with another tensor.
 
@@ -76,6 +76,43 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Ten
     assert freqs_cis.shape == (seqlen, x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
+
+def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """
+    Reshape frequency tensor for broadcasting it with another tensor.
+
+    This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
+    for the purpose of broadcasting the frequency tensor during element-wise operations.
+
+    The input freqs_cis tensor is assumed to be of shape (max_seqlen, dim),
+    and the first seqlen elements will be sliced, but dim must match x.
+
+    Args:
+        freqs_cis (torch.Tensor): Frequency tensor to be reshaped.
+        x (torch.Tensor): Target tensor for broadcasting compatibility.
+
+    Returns:
+        torch.Tensor: Reshaped frequency tensor.
+    """
+    from torch.distributed._tensor import DTensor
+    ndim = x.ndim
+    assert ndim > 1
+    seqlen = x.shape[1]
+
+    # Under CP, freqs_cis is typically a DTensor sharded on the seq dim.
+    # Use the local shard (already the correct global-offset slice).
+    local = freqs_cis.to_local() if isinstance(freqs_cis, DTensor) else freqs_cis
+    # If local has more than we need, slice; if exactly matches, use as-is.
+    if local.size(0) >= seqlen:
+        local = local[:seqlen]
+    else:
+        # Guard (shouldn't happen with proper CP buffers); pad last row to avoid shape errors.
+        pad = seqlen - local.size(0)
+        last = local[-1:].expand(pad, local.size(1))
+        local = torch.cat([local, last], dim=0)
+    assert local.shape == (seqlen, x.shape[-1]), f"freqs_cis local shape {local.shape} incompatible with (seqlen={seqlen}, head_dim={x.shape[-1]})"
+    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    return local.view(*shape)
 
 
 def apply_rotary_emb(
@@ -1006,11 +1043,11 @@ class Transformer(nn.Module):
         # passthrough for nonexistent layers, allows easy configuration of pipeline parallel stages
         h = self.tok_embeddings(input_ids) if self.tok_embeddings else input_ids
 
-        # Ensure rotary buffer is on the same device as activations (important under CP/FSDP)
-        # Do not convert DTensor to a regular Tensor; keep replicated DTensor under TP
-        # if not isinstance(self.freqs_cis, DTensor):
-        #     if self.freqs_cis.device != h.device:
-        #         self.freqs_cis = self.freqs_cis.to(h.device)
+        # Ensure rotary buffer is on the same device (safe for non-DTensor only).
+        # Important: DO NOT convert DTensor → Tensor (keeps TP/CP intact).
+        from torch.distributed._tensor import DTensor
+        if not isinstance(self.freqs_cis, DTensor) and self.freqs_cis.device != h.device:
+            self.freqs_cis = self.freqs_cis.to(h.device)
 
         for layer in self.layers.values():
             h = layer(h, self.freqs_cis)
